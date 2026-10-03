@@ -27,6 +27,14 @@ import {
 	type GridNavigationDirection,
 } from "../../composables/useGridSelection";
 import { Button } from "../ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
 import ResultFilterBar from "./ResultFilterBar.vue";
 
 const ROW_HEIGHT = 26;
@@ -109,6 +117,18 @@ const columnIndexes = computed(() =>
 
 const editable = computed(() => props.editable);
 
+/**
+ * Whether this result can be re-sorted at all.
+ *
+ * `filterable` is the gate, not `editable`: both mean "a table tab", but
+ * `editable` additionally demands a primary key, and a keyless table is still
+ * perfectly sortable — there is just nothing in it to UPDATE. `filterable` is
+ * exactly the question "can the caller rebuild this statement?", which is what
+ * emitting `sort` asks of it, and it is the same flag the filter bar already
+ * reads as its own `sortable`.
+ */
+const sortable = computed(() => props.filterable);
+
 /** Editing needs somewhere to send an UPDATE, so a keyless table is read-only. */
 const canEdit = computed(
 	() => editable.value !== null && editable.value.keyColumns.length > 0,
@@ -163,19 +183,89 @@ const gridFocused = ref(false);
 const sortColumn = ref<string | null>(null);
 const sortDirection = ref<"asc" | "desc">("asc");
 
-function cycleSort(column: string): void {
-	if (sortColumn.value !== column) {
-		sortColumn.value = column;
-		sortDirection.value = "asc";
-	} else if (sortDirection.value === "asc") {
-		sortDirection.value = "desc";
-	} else {
-		// A third click drops the ORDER BY entirely and restores the natural
-		// order, which is the only way back to the server's default.
-		sortColumn.value = null;
-	}
-	if (sortColumn.value) emit("sort", sortColumn.value, sortDirection.value);
-	else emit("sort", "", "asc");
+/**
+ * Sets the sort outright. The header menu states the direction the user picked
+ * rather than stepping through one, because "which way" is a choice, not a
+ * step in a sequence — so there is no cycle to fast-click through by accident.
+ */
+function setSort(column: string, direction: "asc" | "desc"): void {
+	if (!sortable.value) return;
+	sortColumn.value = column;
+	sortDirection.value = direction;
+	emit("sort", column, direction);
+}
+
+/**
+ * Drops the ORDER BY. An empty column is the caller's long-standing contract
+ * for "no sort at all"; it ignores the direction, but the signature has no
+ * optional direction and changing it would reach into the workspace.
+ */
+function clearSort(): void {
+	if (!sortable.value) return;
+	sortColumn.value = null;
+	emit("sort", "", "asc");
+}
+
+/** True while the grid is showing the result of some column's sort. */
+const hasSort = computed(() => sortColumn.value !== null);
+
+/** The column the header menu is open on; null while the menu is closed. */
+const menuColumn = ref<string | null>(null);
+const menuOpen = ref(false);
+/**
+ * Virtual anchor for the header menu. `DropdownMenu` positions its content
+ * against the trigger element, so a zero-size element parked at the pointer is
+ * what puts the menu under the cursor rather than under the whole header.
+ */
+const menuAnchor = ref({ x: 0, y: 0 });
+
+function openHeaderMenu(column: string, x: number, y: number): void {
+	menuColumn.value = column;
+	menuAnchor.value = { x, y };
+	menuOpen.value = true;
+}
+
+function onHeaderContextMenu(column: string, event: MouseEvent): void {
+	if (!sortable.value) return;
+	// The resize handle stops the `pointerdown` that starts a drag, but a
+	// `contextmenu` is a separate event and still bubbles to the cell, so the
+	// handle has to be recognised by what was hit rather than assumed away.
+	const target = event.target instanceof Element ? event.target : null;
+	if (target?.closest(".grid-column-resize")) return;
+	event.preventDefault();
+	openHeaderMenu(column, event.clientX, event.clientY);
+}
+
+/**
+ * Keyboard route to the same menu: the ContextMenu key, Shift+F10, and the
+ * menu key some keyboards send on their own. No pointer means no coordinates,
+ * so the menu hangs off the header's own top-left corner.
+ */
+function onHeaderKeydown(column: string, event: KeyboardEvent): void {
+	if (!sortable.value) return;
+	const isMenuKey =
+		event.key === "ContextMenu" ||
+		(event.key === "F10" && event.shiftKey) ||
+		event.key === "Menu";
+	if (!isMenuKey) return;
+	// The grid owns the arrow keys and Escape; a menu key must not reach it.
+	event.preventDefault();
+	event.stopPropagation();
+	const cell = event.currentTarget;
+	if (!(cell instanceof HTMLElement)) return;
+	const rect = cell.getBoundingClientRect();
+	openHeaderMenu(column, rect.left, rect.bottom);
+}
+
+/** Menu entries, so the template never has to reach past a null column. */
+function sortMenuAscending(): void {
+	if (menuColumn.value === null) return;
+	setSort(menuColumn.value, "asc");
+}
+
+function sortMenuDescending(): void {
+	if (menuColumn.value === null) return;
+	setSort(menuColumn.value, "desc");
 }
 
 /** Pointer state for the resize handle on one column's right edge. */
@@ -433,15 +523,15 @@ function onRowNumberClick(row: number, event: MouseEvent): void {
 }
 
 /**
- * A header click does two things, in this order: it selects the column, and —
- * only for a table tab, where the statement can be rebuilt with an ORDER BY —
- * it cycles the server-side sort. A query result has no table behind it, so
- * there is nothing to re-run and the click stays a pure selection.
+ * A header click only ever *selects*: a plain click collapses the selection
+ * onto the column, a shift-click extends from the existing anchor. Sorting
+ * moved to the header's context menu, because a click that re-runs the
+ * statement is one the user cannot take back — choosing a column and ordering
+ * the result are separate intentions and now have separate gestures.
  */
 function onHeaderClick(col: number, event: MouseEvent): void {
 	const last = rows.value.length - 1;
 	if (last < 0) return;
-	if (editable.value) cycleSort(columns.value[col]);
 	if (event.shiftKey && selection.focus.value) {
 		selection.anchor.value = { row: 0, col };
 		selection.extendSelectionTo({ row: last, col: selection.focus.value.col });
@@ -681,6 +771,10 @@ function rowKey(_row: unknown, index: number): number {
 						>
 							#
 						</div>
+						<!-- `tabindex`/`aria-haspopup` because a sort is now a menu:
+						     a pointer is not the only way to open it. `aria-label`
+						     names the column for a screen reader, which would
+						     otherwise read the truncated text. -->
 						<div
 							v-for="(column, columnIndex) in columns"
 							:key="column"
@@ -688,8 +782,13 @@ function rowKey(_row: unknown, index: number): number {
 							role="columnheader"
 							:style="cellStyleFor(column)"
 							:title="column"
+							:aria-label="column"
+							tabindex="0"
+							:aria-haspopup="sortable ? 'menu' : undefined"
 							:data-selected="columnIsSelected(columnIndex)"
 							@click="onHeaderClick(columnIndex, $event)"
+							@contextmenu="onHeaderContextMenu(column, $event)"
+							@keydown="onHeaderKeydown(column, $event)"
 						>
 							<span class="truncate">{{ column }}</span>
 							<ArrowUp
@@ -792,6 +891,41 @@ function rowKey(_row: unknown, index: number): number {
 					</div>
 				</div>
 			</div>
+			<!-- One menu for every header. The headers live in a horizontal
+			     scroller over a virtualised body, so a per-cell menu would
+			     remount with it; this one is parked here, once, and anchored at
+			     the pointer or the focused header instead. -->
+			<DropdownMenu v-if="sortable" v-model:open="menuOpen">
+				<!-- `as-child` hands the anchor element straight to the popper,
+				     so the trigger IS the zero-size element. It is `fixed`
+				     because the coordinates are viewport-relative while the
+				     grid sits offset inside the workspace pane. -->
+				<DropdownMenuTrigger as-child>
+					<span
+						class="pointer-events-none fixed size-0"
+						:style="{
+							left: `${menuAnchor.x}px`,
+							top: `${menuAnchor.y}px`,
+						}"
+						aria-hidden="true"
+					/>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent class="w-48" aria-label="Column actions">
+					<DropdownMenuLabel class="truncate">{{ menuColumn }}</DropdownMenuLabel>
+					<DropdownMenuItem :disabled="!menuColumn" @select="sortMenuAscending">
+						<ArrowUp aria-hidden="true" />
+						Sort ascending
+					</DropdownMenuItem>
+					<DropdownMenuItem :disabled="!menuColumn" @select="sortMenuDescending">
+						<ArrowDown aria-hidden="true" />
+						Sort descending
+					</DropdownMenuItem>
+					<DropdownMenuSeparator />
+					<DropdownMenuItem :disabled="!hasSort" @select="clearSort">
+						Clear sort
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
 
 			<!-- One row, three zones, exactly as DBX lays it out: what came back
 			     and how long it took, the statement that produced it, then the

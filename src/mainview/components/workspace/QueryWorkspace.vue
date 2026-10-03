@@ -349,11 +349,25 @@ const tableSql = computed(() => {
 	return queryStore.executedSql[id] ?? tableSelectSql(tab);
 });
 
-/** Rebuilds the tab's SELECT with the requested ORDER BY and re-runs it. */
+/**
+ * Rebuilds the tab's SELECT with the requested ORDER BY and re-runs it.
+ *
+ * An empty column is how the grid says "drop the ORDER BY", so it has to
+ * delete the tab's entry rather than return early — otherwise clearing the
+ * sort would leave the previous ORDER BY standing and the statement on screen
+ * would not match what the user just asked for.
+ */
 function onGridSort(column: string, direction: "asc" | "desc"): void {
 	const tab = activeTab.value;
-	if (!tab || tab.mode !== "table" || !column) return;
-	tableSort.value = { ...tableSort.value, [tab.id]: { column, direction } };
+	if (!tab || tab.mode !== "table") return;
+	if (!column) {
+		if (!tableSort.value[tab.id]) return;
+		const next = { ...tableSort.value };
+		delete next[tab.id];
+		tableSort.value = next;
+	} else {
+		tableSort.value = { ...tableSort.value, [tab.id]: { column, direction } };
+	}
 	void loadTable(tab);
 }
 

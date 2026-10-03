@@ -416,10 +416,13 @@ function closeMenuOthers(): void {
 			</div>
 		</template>
 
+		<!-- `self-center` because the strip stretches its children: a sized
+		     button would otherwise sit on the top edge instead of on the
+		     pills' optical centre. -->
 		<Button
 			variant="ghost"
 			size="icon-sm"
-			class="shrink-0"
+			class="shrink-0 self-center"
 			aria-label="New query tab"
 			@click="emit('new-tab')"
 		>

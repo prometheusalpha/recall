@@ -41,12 +41,12 @@ const SEARCH_SEPARATOR = ".";
  * which is not always the database: Postgres filters on the schema, so
  * `connection → schema → table` is the honest shape, while MySQL has no schema
  * layer and filters on the database itself.
- *
  * Below a table the tree carries read-only metadata: one `group` row per kind
- * of object. Opening the table fetches all four lists at once, so every group
- * row knows its count while it is still closed; the `leaf` rows those counts
- * describe are never loaded into the tree the loaders walk — they live in
- * `tableMeta` and are materialised as children only for the group the user opens.
+ * of object. Opening the table only builds those four rows; each list is
+ * fetched when its group is opened, so expanding a table a user is merely
+ * browsing costs nothing. The `leaf` rows a list describes are never loaded
+ * into the tree the loaders walk — they live in `tableMeta` and are
+ * materialised as children only for the group that asked for them.
  */
 type TreeNode =
 	| {
@@ -184,9 +184,8 @@ const loadingKeys = ref(new Set<string>());
  * Fetched metadata lists, keyed by table key and then by group. Kept apart
  * from `children` on purpose: `children` is what `flattenTree` walks, so a leaf
  * parked there would render at the wrong depth. This is also the memo that
- * makes a group cost at most one request per table, and the source a closed
- * group row reads its count from — which is why opening the table fills all
- * four lists rather than only the one the user went on to open.
+ * makes a group cost at most one request however often it is expanded, and the
+ * place a group row reads its count from once its list has been asked for.
  */
 const tableMeta = ref(new Map<string, Map<MetaGroup, TreeNode[]>>());
 
@@ -389,9 +388,9 @@ function triggerLeaves(tableKey: string, triggers: TriggerInfo[]): TreeNode[] {
 }
 
 /**
- * One request for one group. The four go out together when a table opens — see
- * `loadTableMeta` — but each stays its own request, so a server that refuses
- * triggers cannot withhold the other three lists.
+ * One request for one group, fired only when the user opens that group. The
+ * four lists stay separate requests, so a server that refuses triggers cannot
+ * withhold the columns.
  */
 async function fetchMetaLeaves(node: GroupNode): Promise<TreeNode[]> {
 	const params = {
@@ -413,29 +412,11 @@ async function fetchMetaLeaves(node: GroupNode): Promise<TreeNode[]> {
 }
 
 /**
- * The four lists behind one table, in flight together so the group rows carry
- * their counts the moment the table opens. Settled independently: a server that
- * refuses one group cannot withhold the other three, and a group it refused is
- * not worth a toast of its own — it reads as empty and the next expand retries.
- */
-async function loadTableMeta(groups: GroupNode[]): Promise<void> {
-	const results = await Promise.allSettled(groups.map((group) => fetchMetaLeaves(group)));
-	groups.forEach((group, index) => {
-		const result = results[index];
-		if (result.status === "fulfilled") {
-			cacheMetaLeaves(group.tableKey, group.group, result.value);
-			failedGroups.value.delete(group.key);
-			return;
-		}
-		cacheMetaLeaves(group.tableKey, group.group, []);
-		failedGroups.value.add(group.key);
-	});
-}
-
-/**
  * Loads a node's children once. A cached or in-flight node returns without
- * touching the network, so re-expanding a subtree costs nothing. Failures are
- * toasted and the node is left uncached, so the next expand retries it.
+ * touching the network, so re-expanding a subtree costs nothing. Connection
+ * and schema failures are toasted and left uncached, so the next expand
+ * retries; a group that fails is handled inside its branch instead, because
+ * it has to stay visibly empty rather than throw away the whole subtree.
  */
 async function loadChildren(node: TreeNode): Promise<void> {
 	if (node.kind === "leaf") return;
@@ -465,27 +446,40 @@ async function loadChildren(node: TreeNode): Promise<void> {
 				})),
 			);
 		} else if (node.kind === "table") {
-			const groups = groupNodes(
+			// A table row is only a container. Its four groups are cheap to build
+			// and cost one request each to fill, so opening a table must fire
+			// none of them — the user opened it to see its name, and only the
+			// group they then expand is a question worth asking the server.
+			setChildren(
 				node.key,
-				node.connectionId,
-				node.database,
-				node.schema,
-				node.table,
+				groupNodes(node.key, node.connectionId, node.database, node.schema, node.table),
 			);
-			setChildren(node.key, groups);
-			await loadTableMeta(groups);
 		} else {
-			// The list is normally already in `tableMeta`, since opening the table
-			// fetched it; only a group whose fetch failed asks the server again.
-			let leaves = failedGroups.value.has(node.key)
+			// The memo is what makes this the single fetch path: an already-loaded
+			// group costs nothing to reopen, and only a group whose fetch failed
+			// (or whose cache was dropped) asks the server again.
+			const cached = failedGroups.value.has(node.key)
 				? undefined
 				: metaLeaves(node.tableKey, node.group);
-			if (!leaves) {
-				leaves = await fetchMetaLeaves(node);
+			if (cached) {
+				setChildren(node.key, cached);
+				return;
+			}
+			try {
+				const leaves = await fetchMetaLeaves(node);
 				cacheMetaLeaves(node.tableKey, node.group, leaves);
 				failedGroups.value.delete(node.key);
+				setChildren(node.key, leaves);
+			} catch {
+				// A refused list is not worth a toast of its own — the group reads
+				// as empty, and marking it is what lets the next expand retry rather
+				// than serve that emptiness forever. Nothing is written to
+				// `children`, since that map is what `loadChildren` reads as
+				// "already loaded" and would block the retry; the cached empty list
+				// is what the row's count falls back to.
+				cacheMetaLeaves(node.tableKey, node.group, []);
+				failedGroups.value.add(node.key);
 			}
-			setChildren(node.key, leaves);
 		}
 	} catch (err) {
 		toast(errorMessage(err));
@@ -527,8 +521,8 @@ function activate(node: TreeNode): void {
  * much at once, and the awaits are cheap relative to the queries they guard.
  *
  * It stops at the containers on purpose. A table row is left closed, because
- * opening one costs four requests and a filter keystroke must not fan out across
- * every table of every connection to reveal the matches.
+ * expanding one fans out into four metadata requests and a filter keystroke
+ * must not do that across every table of every connection to reveal matches.
  */
 async function expandAll(): Promise<void> {
 	const connectionNodes = roots.value;
@@ -551,11 +545,10 @@ async function expandAll(): Promise<void> {
  * a node the user never opened keeps its (still empty) absence and stays offline.
  *
  * The drop cascades: table rows lose their group rows, group rows lose their
- * leaves, and the fetched metadata goes with them. Metadata is per table rather
- * than per filter, so the lists still match what is on screen — but the tree
- * that shows them has just been rebuilt, and holding every table the user ever
- * drilled into would grow without bound. The failure marks go too, so a stale
- * empty list can never suppress the retry that would replace it.
+ * leaves, and the fetched metadata goes with them. Holding every list the user
+ * ever drilled into would grow without bound, and the tree that shows them has
+ * just been rebuilt anyway. The failure marks go too, so a stale empty list
+ * can never suppress the retry that would replace it.
  */
 function dropTableLists(): void {
 	const stale = [`${KEY_PREFIX.schema}|`, `${KEY_PREFIX.table}|`, `${KEY_PREFIX.group}|`];
@@ -629,10 +622,10 @@ function rowGlyph(node: TreeNode): { icon?: Component; iconClass: string } {
 }
 
 /**
- * The count trailing a row's label. A group's is known as soon as its table is
- * open, so it shows while the group is still collapsed — that is the whole
- * point of fetching the four lists up front. Every other row waits for its own
- * expand, since a zero for a node nobody has asked about would be a lie.
+ * The count trailing a row's label. A group's is known only once it has been
+ * fetched, so it appears from that first expand onwards and stays while the
+ * group is collapsed again. Every other row waits for its own expand, since a
+ * zero for a node nobody has asked about would be a lie.
  */
 function childCountOf(node: TreeNode): number | undefined {
 	if (node.kind === "group") return metaLeaves(node.tableKey, node.group)?.length;
