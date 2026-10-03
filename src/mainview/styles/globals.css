@@ -633,6 +633,43 @@ overflow: hidden;
 	border-right: 1px solid var(--border);
 }
 
+/* The mnemonic sits in its own gutter, beside the line numbers: a small centred
+ * chip so it reads as a label on the line rather than as part of the text. */
+.cm-bookmark-gutter {
+	background: var(--background) !important;
+	border-right: none !important;
+}
+
+.cm-bookmark-gutter .cm-gutterElement {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0 3px;
+}
+
+.cm-bookmark-glyph {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 1.5ch;
+	height: 1.5em;
+	border: 1px solid color-mix(in srgb, var(--primary) 55%, transparent);
+	border-radius: 3px;
+	background: color-mix(in srgb, var(--primary) 16%, transparent);
+	color: var(--primary);
+	font-family: var(--font-mono);
+	font-size: 10px;
+	font-weight: 700;
+	line-height: 1;
+	user-select: none;
+}
+
+.cm-bookmark-gutter .cm-activeLineGutter .cm-bookmark-glyph,
+.cm-bookmark-gutter .cm-bookmark-glyph:hover {
+	background: color-mix(in srgb, var(--primary) 30%, transparent);
+	border-color: var(--primary);
+}
+
 .cm-activeLine,
 .cm-activeLineGutter {
 	background: color-mix(in srgb, var(--accent) 40%, transparent) !important;

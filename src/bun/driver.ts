@@ -32,6 +32,13 @@ export interface Driver {
 	/** Fully-qualified, quoted table reference. */
 	qualify(database: string, schema: string, table: string): string;
 	/**
+	 * Whether a session is pinned to one database. Postgres binds its socket to
+	 * a database at connect time and cannot reach another one, so a request
+	 * naming a different database needs its own connection; MySQL qualifies
+	 * cross-database and answers any database from the one session.
+	 */
+	readonly databaseScoped: boolean;
+	/**
 	 * Postgres only; MySQL returns []. `cfg` is passed because the reference
 	 * app's schema list honours `ConnectionConfig.showSystemSchemas`.
 	 */

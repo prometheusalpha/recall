@@ -11,6 +11,7 @@ import type { ConnectionConfig } from "../../../shared/types";
 import type { FileDatasource, SqlFileNode } from "../../../shared/sqlFile";
 import { toast } from "../../composables/useToast";
 import { errorMessage } from "../../lib/rpc";
+import { resolveFileDatasource } from "../../lib/fileDatasource";
 import { useConnectionsStore } from "../../stores/connections";
 import { useSqlFilesStore } from "../../stores/sqlFiles";
 import { useTabsStore } from "../../stores/tabs";
@@ -155,28 +156,24 @@ function onMenu(node: SqlFileNode, event: MouseEvent): void {
  * deleted also falls through to the fallback rather than dead-ending.
  */
 function resolveDatasource(path: string): FileDatasource | null {
-	const bound = sqlFiles.bindingFor(path);
-	if (bound && connections.configs.some((c) => c.id === bound.connectionId)) {
-		return bound;
-	}
-
-	const fallback =
-		connections.configs.find((c) => c.id === connections.activeId) ??
-		connections.configs[0];
-	if (!fallback) return null;
-
-	if (!warnedFallbacks.has(path)) {
+	const resolution = resolveFileDatasource(
+		path,
+		sqlFiles.bindings,
+		connections.configs,
+		connections.activeId,
+	);
+	if (!resolution) return null;
+	if (resolution.usedFallback && !warnedFallbacks.has(path)) {
 		warnedFallbacks.add(path);
+		const active = connections.configs.find(
+			(c) => c.id === connections.activeId,
+		);
 		toast(
-			`No datasource bound to this file — using ${fallback.name}. Right-click to change it.`,
+			`No datasource bound to this file — using ${(active ?? connections.configs[0]).name}. Set one from the toolbar above the editor.`,
 			6000,
 		);
 	}
-	return {
-		connectionId: fallback.id,
-		database: fallback.database,
-		schema: fallback.dbType === "mysql" ? "" : fallback.defaultSchema,
-	};
+	return resolution.datasource;
 }
 
 /** Opens a file as a query tab against its bound (or fallback) datasource. */
@@ -199,6 +196,7 @@ async function onActivate(node: SqlFileNode): Promise<void> {
 			database: datasource.database,
 			schema: datasource.schema,
 			sql: content,
+			path: node.path,
 		});
 		// The tabs store titles every query "Query"; a file's own name is far
 		// more useful once several are open at once.

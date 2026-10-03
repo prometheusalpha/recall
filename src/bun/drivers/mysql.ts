@@ -36,6 +36,7 @@ const TABLE_TYPE_BY_VALUE: Record<string, string> = {
 
 export const mysqlDriver: Driver = {
 	dbType: "mysql",
+	databaseScoped: false,
 
 	buildOptions(cfg: ConnectionConfig): SQLOptions {
 		const options: SQL.PostgresOrMySQLOptions = {

@@ -289,6 +289,11 @@ const attemptedTableTabs = ref<Record<string, boolean>>({});
 /** Runs the tab's `SELECT *` and records the attempt either way. */
 async function loadTable(tab: Tab): Promise<void> {
 	try {
+		// The profile list decides how the table name is quoted — backticks for
+		// MySQL, double quotes for Postgres — and it lives in the backend. A tab
+		// restored from disk is often the first thing on screen, so without this
+		// the statement gets quoted for Postgres and a MySQL server rejects it.
+		await connectionsStore.hydrate();
 		await queryStore.run(tab.id, { sqlOverride: tableSelectSql(tab) });
 	} catch (err) {
 		// `run` reports failures as an error result rather than throwing, so

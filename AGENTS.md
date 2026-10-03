@@ -1,0 +1,3 @@
+- Với các yêu cầu tính năng mới, hãy tham khảo ../dbx để xem dbx làm gì và có thể làm theo không
+- Tham khảo GUIDELINE.md cho cấu trúc thư mục, folder và tech
+- Đây là repo electronbun + TS + Vue

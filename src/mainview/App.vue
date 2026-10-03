@@ -23,6 +23,7 @@ import { useToast } from "./composables/useToast";
 import { rpc } from "./lib/rpc";
 import { useTabsStore } from "./stores/tabs";
 import { useConnectionsStore } from "./stores/connections";
+import { useBookmarksStore } from "./stores/bookmarks";
 
 const tabs = useTabsStore();
 const { theme, toggle } = useTheme();
@@ -33,6 +34,10 @@ const { toast } = useToast();
 // exists once the backend answers. Hydrating here covers every consumer of the
 // store, and the tree holds its empty state back until it finishes.
 void useConnectionsStore().hydrate();
+
+// Bookmarks come from the same backend-owned database as the profiles, and the
+// editor's gutter cannot draw them until the list arrives.
+void useBookmarksStore().load();
 
 const connectionDialogOpen = ref(false);
 /** Profile being edited, or null when the dialog is creating a new one. */

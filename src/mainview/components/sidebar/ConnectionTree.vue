@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import type { Component } from "vue";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
-import { Columns3, Database, Key, Link, Pencil, Search, Server, Table2, Zap } from "lucide-vue-next";
+import { Columns3, Database, Folder, Key, Link, Pencil, Search, Server, Table2, Zap } from "lucide-vue-next";
 import TreeRow from "./TreeRow.vue";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -37,10 +37,16 @@ const ROW_BUFFER = 200;
 const SEARCH_SEPARATOR = ".";
 
 /**
- * The second level is the container the table list is actually queried against,
- * which is not always the database: Postgres filters on the schema, so
- * `connection → schema → table` is the honest shape, while MySQL has no schema
- * layer and filters on the database itself.
+ * A connection is a *server*, not a database: it carries the host, port and
+ * credentials, and every database on it is reachable from that one profile.
+ * So the levels below it are `connection → database → schema → table` for
+ * Postgres. MySQL has no schema layer below a database, so its database rows
+ * list tables directly.
+ *
+ * Postgres cannot cross databases in one session, so a database row is a
+ * separate socket to the server, opened on demand — the backend keys its pool
+ * by (profile, database) and the tree just names the pair.
+ *
  * Below a table the tree carries read-only metadata: one `group` row per kind
  * of object. Opening the table only builds those four rows; each list is
  * fetched when its group is opened, so expanding a table a user is merely
@@ -55,6 +61,13 @@ type TreeNode =
 			id: string;
 			label: string;
 			status: ConnectionStatus;
+	  }
+	| {
+			kind: "database";
+			key: string;
+			connectionId: string;
+			database: string;
+			label: string;
 	  }
 	| {
 			kind: "schema";
@@ -200,6 +213,7 @@ const failedGroups = ref(new Set<string>());
 /** One letter per node kind, so a key names its kind without a full scan. */
 const KEY_PREFIX: Record<TreeNode["kind"], string> = {
 	connection: "c",
+	database: "d",
 	schema: "s",
 	table: "t",
 	group: "g",
@@ -265,35 +279,46 @@ function parseSearch(term: string): { filter: string; scoped: boolean } {
 const search = computed(() => parseSearch(searchTerm.value));
 
 /**
- * The single container level under a connection, in the shape the table list
- * is actually queried in. Postgres filters on `defaultSchema`, so the one
- * visible node is that schema; MySQL filters on the database, so each database
- * is its own node.
+ * The databases on a server. Both dialects list them the same way, so this is
+ * the only place the tree asks the server what it hosts; what happens below a
+ * database is the driver's business.
  */
-async function containerNodes(connectionId: string): Promise<TreeNode[]> {
-	const config = connections.configs.find((entry) => entry.id === connectionId);
-	if (!config) return [];
-	if (config.dbType === "mysql") {
-		const databases = await connections.listDatabases(connectionId);
-		return databases.map((entry) => ({
-			kind: "schema",
-			key: makeKey("schema", connectionId, entry.name),
-			connectionId,
-			database: entry.name,
-			schema: entry.name,
-			label: entry.name,
-		}));
-	}
-	return [
-		{
-			kind: "schema",
-			key: makeKey("schema", connectionId, config.defaultSchema),
-			connectionId,
-			database: config.database,
-			schema: config.defaultSchema,
-			label: config.defaultSchema,
-		},
-	];
+async function databaseNodes(connectionId: string): Promise<TreeNode[]> {
+	const databases = await connections.listDatabases(connectionId);
+	return databases.map((entry) => ({
+		kind: "database",
+		key: makeKey("database", connectionId, entry.name),
+		connectionId,
+		database: entry.name,
+		label: entry.name,
+	}));
+}
+
+/**
+ * The table rows of one schema.
+ *
+ * MySQL has no schema layer, so its database is passed as the schema too —
+ * that is the qualification `mysqlDriver.listTables` writes.
+ */
+async function tableNodes(
+	connectionId: string,
+	database: string,
+	schema: string,
+): Promise<TreeNode[]> {
+	const tables = await connections.listTables({
+		connectionId,
+		database,
+		schema,
+		filter: search.value.filter,
+	});
+	return tables.map((entry) => ({
+		kind: "table",
+		key: tableKeyOf(connectionId, database, schema, entry.name),
+		database,
+		schema,
+		table: entry.name,
+		connectionId,
+	}));
 }
 
 function childrenOf(node: TreeNode): TreeNode[] | undefined {
@@ -426,24 +451,39 @@ async function loadChildren(node: TreeNode): Promise<void> {
 	try {
 		if (node.kind === "connection") {
 			await connections.ensureConnected(node.id);
-			setChildren(node.key, await containerNodes(node.id));
+			setChildren(node.key, await databaseNodes(node.id));
+		} else if (node.kind === "database") {
+			// Postgres nests schemas inside the database; MySQL has no such
+			// layer, so its database opens straight onto its tables.
+			const config = connections.configs.find(
+				(entry) => entry.id === node.connectionId,
+			);
+			if (config?.dbType === "mysql") {
+				setChildren(
+					node.key,
+					await tableNodes(node.connectionId, node.database, node.database),
+				);
+			} else {
+				const schemas = await connections.listSchemas({
+					connectionId: node.connectionId,
+					database: node.database,
+				});
+				setChildren(
+					node.key,
+					schemas.map((name) => ({
+						kind: "schema",
+						key: makeKey("schema", node.connectionId, node.database, name),
+						connectionId: node.connectionId,
+						database: node.database,
+						schema: name,
+						label: name,
+					})),
+				);
+			}
 		} else if (node.kind === "schema") {
-			const tables = await connections.listTables({
-				connectionId: node.connectionId,
-				database: node.database,
-				schema: node.schema,
-				filter: search.value.filter,
-			});
 			setChildren(
 				node.key,
-				tables.map((entry) => ({
-					kind: "table",
-					key: tableKeyOf(node.connectionId, node.database, node.schema, entry.name),
-					database: node.database,
-					schema: node.schema,
-					table: entry.name,
-					connectionId: node.connectionId,
-				})),
+				await tableNodes(node.connectionId, node.database, node.schema),
 			);
 		} else if (node.kind === "table") {
 			// A table row is only a container. Its four groups are cheap to build
@@ -516,25 +556,28 @@ function activate(node: TreeNode): void {
 }
 
 /**
- * Opens every connection and its container node so a table-name filter has
- * somewhere to match. Sequenced rather than parallel: a server only accepts so
- * much at once, and the awaits are cheap relative to the queries they guard.
+ * Opens every connection, its databases and their schemas so a table-name
+ * filter has somewhere to match. Sequenced rather than parallel: a server only
+ * accepts so much at once, and the awaits are cheap relative to the queries
+ * they guard.
  *
- * It stops at the containers on purpose. A table row is left closed, because
+ * It stops at the schemas on purpose. A table row is left closed, because
  * expanding one fans out into four metadata requests and a filter keystroke
  * must not do that across every table of every connection to reveal matches.
  */
 async function expandAll(): Promise<void> {
-	const connectionNodes = roots.value;
-	for (const node of connectionNodes) {
-		setExpanded(node.key, true);
-		await loadChildren(node);
-	}
-	for (const node of connectionNodes) {
-		for (const child of childrenOf(node) ?? []) {
-			if (child.kind !== "schema") continue;
-			setExpanded(child.key, true);
-			await loadChildren(child);
+	for (const connection of roots.value) {
+		setExpanded(connection.key, true);
+		await loadChildren(connection);
+		for (const database of childrenOf(connection) ?? []) {
+			if (database.kind !== "database") continue;
+			setExpanded(database.key, true);
+			await loadChildren(database);
+			for (const schema of childrenOf(database) ?? []) {
+				if (schema.kind !== "schema") continue;
+				setExpanded(schema.key, true);
+				await loadChildren(schema);
+			}
 		}
 	}
 }
@@ -551,7 +594,12 @@ async function expandAll(): Promise<void> {
  * can never suppress the retry that would replace it.
  */
 function dropTableLists(): void {
-	const stale = [`${KEY_PREFIX.schema}|`, `${KEY_PREFIX.table}|`, `${KEY_PREFIX.group}|`];
+	const stale = [
+		`${KEY_PREFIX.database}|`,
+		`${KEY_PREFIX.schema}|`,
+		`${KEY_PREFIX.table}|`,
+		`${KEY_PREFIX.group}|`,
+	];
 	for (const key of children.value.keys()) {
 		if (stale.some((prefix) => key.startsWith(prefix))) children.value.delete(key);
 	}
@@ -569,9 +617,13 @@ async function reloadOpenContainers(): Promise<void> {
 	for (const connection of roots.value) {
 		if (!isExpanded(connection)) continue;
 		await loadChildren(connection);
-		for (const child of childrenOf(connection) ?? []) {
-			if (child.kind !== "schema" || !isExpanded(child)) continue;
-			await loadChildren(child);
+		for (const database of childrenOf(connection) ?? []) {
+			if (database.kind !== "database" || !isExpanded(database)) continue;
+			await loadChildren(database);
+			for (const schema of childrenOf(database) ?? []) {
+				if (schema.kind !== "schema" || !isExpanded(schema)) continue;
+				await loadChildren(schema);
+			}
 		}
 	}
 }
@@ -612,7 +664,10 @@ const rows = computed<FlatTreeNode<TreeNode>[]>(() =>
  */
 function rowGlyph(node: TreeNode): { icon?: Component; iconClass: string } {
 	if (node.kind === "connection") return { icon: Server, iconClass: "text-amber-500" };
-	if (node.kind === "schema") return { icon: Database, iconClass: "text-yellow-500" };
+	if (node.kind === "database") return { icon: Database, iconClass: "text-yellow-500" };
+	if (node.kind === "schema") {
+		return { icon: Folder, iconClass: "text-yellow-500" };
+	}
 	if (node.kind === "table") return { icon: Table2, iconClass: "text-green-500" };
 	if (node.kind === "group") {
 		const group = META_GROUPS[node.group];
@@ -630,8 +685,12 @@ function rowGlyph(node: TreeNode): { icon?: Component; iconClass: string } {
 function childCountOf(node: TreeNode): number | undefined {
 	if (node.kind === "group") return metaLeaves(node.tableKey, node.group)?.length;
 	if (!isExpanded(node)) return undefined;
-	if (node.kind === "schema") {
-		return (childrenOf(node) ?? []).filter((child) => child.kind === "table").length;
+	// A MySQL database holds tables directly; a Postgres one holds schemas, so
+	// counting its tables would report zero for a database full of them.
+	if (node.kind === "database" || node.kind === "schema") {
+		return (childrenOf(node) ?? []).filter(
+			(child) => child.kind === "schema" || child.kind === "table",
+		).length;
 	}
 	return undefined;
 }
@@ -716,19 +775,29 @@ async function locateActiveTab(): Promise<void> {
 	setExpanded(connection.key, true);
 	await loadChildren(connection);
 
-	// The container row's own `database`/`schema` fields are what identify it:
-	// its key names the level it lists (the database on MySQL, the default
-	// schema elsewhere), which the tab does not necessarily carry.
-	const container = (childrenOf(connection) ?? []).find(
-		(node): node is Extract<TreeNode, { kind: "schema" }> =>
-			node.kind === "schema" &&
-			node.database === tab.database &&
-			node.schema === tab.schema,
+	// The tab names both a database and a schema; the tree's rows carry them as
+	// fields, which is what identifies a row without relying on its key. MySQL
+	// has no schema row, so its database is the deepest container and holds the
+	// table itself.
+	const database = (childrenOf(connection) ?? []).find(
+		(node): node is Extract<TreeNode, { kind: "database" }> =>
+			node.kind === "database" && node.database === tab.database,
 	);
-	if (!container) return;
+	if (!database) return;
 
-	setExpanded(container.key, true);
-	await loadChildren(container);
+	setExpanded(database.key, true);
+	await loadChildren(database);
+
+	const schema = (childrenOf(database) ?? []).find(
+		(node): node is Extract<TreeNode, { kind: "schema" }> =>
+			node.kind === "schema" && node.schema === tab.schema,
+	);
+	const container = schema ?? database;
+
+	if (schema) {
+		setExpanded(schema.key, true);
+		await loadChildren(schema);
+	}
 
 	// A query tab names no table, so the deepest row it can resolve to is its
 	// container; a table the active filter is hiding falls back to it as well,

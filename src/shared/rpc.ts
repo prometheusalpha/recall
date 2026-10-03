@@ -13,6 +13,8 @@ import type {
 	TriggerInfo,
 } from "./types";
 
+import type { Bookmark } from "./bookmark";
+
 import type {
 	SqlFileContent,
 	SqlFileNode,
@@ -56,6 +58,15 @@ export type BunRequests = {
 	listDatabases: {
 		params: { connectionId: string };
 		response: DatabaseInfo[];
+	};
+	/**
+	 * Schemas inside one database. Postgres only; MySQL answers with [] because
+	 * it has no schema level below a database. A Postgres session is pinned to
+	 * its database, so this opens (and keeps) a session for `database`.
+	 */
+	listSchemas: {
+		params: { connectionId: string; database: string };
+		response: string[];
 	};
 	/**
 	 * Drop the stored secret for a profile the user no longer wants kept.
@@ -183,6 +194,38 @@ export type BunRequests = {
 	writeSqlFile: {
 		params: { path: string; content: string; expectedVersion: string | null };
 		response: SqlFileWriteResult;
+	};
+	/**
+	 * Every mnemonic bookmark, ordered by mnemonic. Rows whose file has been
+	 * deleted are dropped by the backend rather than reported, so the list only
+	 * ever holds bookmarks that can still be jumped to.
+	 */
+	listBookmarks: {
+		params: Record<string, never>;
+		response: Bookmark[];
+	};
+	/**
+	 * Bind a mnemonic to a line of a file. `lineText` is the line itself: the
+	 * renderer holds the editor's text and the backend owns the digest, so the
+	 * the bookmark survives edits that shift it. A mnemonic already in use is
+	 * replaced.
+	 */
+	setBookmark: {
+		params: { mnemonic: string; path: string; line: number; lineText: string };
+		response: Bookmark;
+	};
+	/** Drop one bookmark. */
+	clearBookmark: {
+		params: { mnemonic: string };
+		response: void;
+	};
+	/**
+	 * Re-anchor a bookmark against the current text of its file and report
+	 * where it now points. Null when the mnemonic is unset or its file is gone.
+	 */
+	resolveBookmark: {
+		params: { mnemonic: string; text: string };
+		response: Bookmark | null;
 	};
 	/** Show a file in Finder / Explorer. */
 	revealInFolder: {

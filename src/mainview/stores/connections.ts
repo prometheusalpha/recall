@@ -402,6 +402,19 @@ export const useConnectionsStore = defineStore("connections", () => {
 		}
 	}
 
+	async function listSchemas(params: {
+		connectionId: string;
+		database: string;
+	}): Promise<string[]> {
+		try {
+			return await rpc.request.listSchemas(params, {
+				maxRequestTime: RPC_TIMEOUTS.metadata,
+			});
+		} catch (err) {
+			throw new Error(errorMessage(err));
+		}
+	}
+
 	async function listTables(params: {
 		connectionId: string;
 		database: string;
@@ -510,6 +523,7 @@ export const useConnectionsStore = defineStore("connections", () => {
 		test,
 		ensureConnected,
 		listDatabases,
+		listSchemas,
 		listTables,
 		listColumns,
 		listIndexes,

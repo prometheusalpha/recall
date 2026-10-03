@@ -1,5 +1,6 @@
 import { SQL } from "bun";
 import { join } from "node:path";
+import type { Bookmark } from "../shared/bookmark";
 import type { BunRequests } from "../shared/rpc";
 import type {
 	ConnectionConfig,
@@ -19,6 +20,7 @@ import {
 	closeConnection,
 	forgetCredential as forgetStoredCredential,
 	getConnection,
+	getServerConnection,
 	loadCredential,
 	openConnection,
 	saveCredential,
@@ -28,6 +30,12 @@ import {
 	listConnections as listStoredConnections,
 	saveConnections as saveStoredConnections,
 } from "./connectionStore";
+import {
+	clearBookmark as clearStoredBookmark,
+	listBookmarks as listStoredBookmarks,
+	resolveBookmark as resolveStoredBookmark,
+	saveBookmark as saveStoredBookmark,
+} from "./bookmarkStore";
 type Params<K extends keyof BunRequests> = BunRequests[K]["params"];
 
 /** Re-exported so `rpc.ts` can forward the push without importing the pool. */
@@ -251,6 +259,26 @@ export const handlers = {
 		}
 		return result;
 	},
+	/**
+	 * Mnemonic bookmarks. These are thin: every decision — which mnemonics
+	 * exist, what a file's line looks like now — belongs to `./bookmarkStore`,
+	 * which owns the database and the digests.
+	 */
+	listBookmarks(): Bookmark[] {
+		return listStoredBookmarks();
+	},
+	setBookmark({ mnemonic, path, line, lineText }: Params<"setBookmark">): Bookmark {
+		return saveStoredBookmark({ mnemonic, path, line, lineText });
+	},
+	clearBookmark({ mnemonic }: Params<"clearBookmark">): void {
+		clearStoredBookmark(mnemonic);
+	},
+	resolveBookmark({
+		mnemonic,
+		text,
+	}: Params<"resolveBookmark">): Bookmark | null {
+		return resolveStoredBookmark(mnemonic, text);
+	},
 
 	async connect({ config }: Params<"connect">) {
 		const resolved = await withStoredPassword(config);
@@ -266,7 +294,7 @@ export const handlers = {
 			// The user turned saving off; do not leave an older secret behind.
 			await forgetStoredCredential(resolved.id, resolved.username);
 		}
-		const live = await openConnection(resolved);
+		const live = await openConnection(resolved, true);
 		return {
 			connectionId: live.config.id,
 			databaseInfo: await driverFor(live.config.dbType).ping(live.db),
@@ -285,12 +313,20 @@ export const handlers = {
 	},
 
 	async listDatabases({ connectionId }: Params<"listDatabases">) {
-		const { db, config } = getConnection(connectionId);
+		const { db, config } = getServerConnection(connectionId);
 		return driverFor(config.dbType).listDatabases(db, "");
 	},
 
+	async listSchemas({
+		connectionId,
+		database,
+	}: Params<"listSchemas">) {
+		const { db, config } = await getConnection(connectionId, database);
+		return driverFor(config.dbType).listSchemas(db, config, database);
+	},
+
 	async listTables({ connectionId, database, schema, filter }: Params<"listTables">) {
-		const { db, config } = getConnection(connectionId);
+		const { db, config } = await getConnection(connectionId, database);
 		return driverFor(config.dbType).listTables(db, database, schema, filter);
 	},
 
@@ -300,7 +336,7 @@ export const handlers = {
 		schema,
 		table,
 	}: Params<"listColumns">) {
-		const { db, config } = getConnection(connectionId);
+		const { db, config } = await getConnection(connectionId, database);
 		return driverFor(config.dbType).listColumns(db, database, schema, table);
 	},
 
@@ -310,7 +346,7 @@ export const handlers = {
 		schema,
 		table,
 	}: Params<"listIndexes">) {
-		const { db, config } = getConnection(connectionId);
+		const { db, config } = await getConnection(connectionId, database);
 		return driverFor(config.dbType).listIndexes(db, database, schema, table);
 	},
 
@@ -320,7 +356,7 @@ export const handlers = {
 		schema,
 		table,
 	}: Params<"listTriggers">) {
-		const { db, config } = getConnection(connectionId);
+		const { db, config } = await getConnection(connectionId, database);
 		return driverFor(config.dbType).listTriggers(db, database, schema, table);
 	},
 
@@ -330,20 +366,18 @@ export const handlers = {
 		schema,
 		table,
 	}: Params<"listForeignKeys">) {
-		const { db, config } = getConnection(connectionId);
+		const { db, config } = await getConnection(connectionId, database);
 		return driverFor(config.dbType).listForeignKeys(db, database, schema, table);
 	},
 
 	async tableDdl({ connectionId, database, schema, table }: Params<"tableDdl">) {
-		const { db, config } = getConnection(connectionId);
+		const { db, config } = await getConnection(connectionId, database);
 		return driverFor(config.dbType).tableDdl(db, database, schema, table);
 	},
 
 	async updateCell({
 		connectionId,
-		// `database` is part of the metadata request shape that every sibling
-		// handler takes, but the drivers already qualify by schema, so it is
-		// intentionally not destructured here.
+		database,
 		schema,
 		table,
 		keyColumns,
@@ -351,7 +385,7 @@ export const handlers = {
 		column,
 		value,
 	}: Params<"updateCell">) {
-		const { db, config } = getConnection(connectionId);
+		const { db, config } = await getConnection(connectionId, database);
 		const isMysql = config.dbType === "mysql";
 		const quote = isMysql ? "`" : '"';
 
@@ -409,8 +443,14 @@ export const handlers = {
 		return { path };
 	},
 
-	async execute({ connectionId, sql, executionId, maxRows }: Params<"execute">) {
-		const { db, config } = getConnection(connectionId);
+	async execute({
+		connectionId,
+		database,
+		sql,
+		executionId,
+		maxRows,
+	}: Params<"execute">) {
+		const { db, config } = await getConnection(connectionId, database);
 		const statements = splitStatements(sql, config.dbType);
 		const startedAt = performance.now();
 		const results: StatementResult[] = [];

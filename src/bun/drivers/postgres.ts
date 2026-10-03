@@ -32,6 +32,7 @@ const TABLE_TYPE_BY_RELKIND: Record<string, string> = {
 
 export const postgresDriver: Driver = {
 	dbType: "postgres",
+	databaseScoped: true,
 
 	buildOptions(cfg: ConnectionConfig): SQLOptions {
 		const params = parseUrlParams(cfg.urlParams);

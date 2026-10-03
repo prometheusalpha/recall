@@ -18,6 +18,7 @@ import type { FileDatasource, SqlFileNode } from "../../shared/sqlFile";
 import { useConnectionsStore } from "../stores/connections";
 import { useSqlFilesStore } from "../stores/sqlFiles";
 import { useTabsStore } from "../stores/tabs";
+import { resolveFileDatasource } from "../lib/fileDatasource";
 import { toast } from "./useToast";
 import { errorMessage } from "../lib/rpc";
 import { matchFuzzy } from "../lib/fuzzy";
@@ -110,19 +111,14 @@ export function useQuickOpen(): QuickOpenPalette {
 	 * listed, because there would be nothing to run it against.
 	 */
 	function datasourceFor(path: string): FileDatasource | null {
-		const bound = sqlFiles.bindingFor(path);
-		if (bound && connections.configs.some((c) => c.id === bound.connectionId)) {
-			return bound;
-		}
-		const config =
-			connections.configs.find((c) => c.id === connections.activeId) ??
-			connections.configs[0];
-		if (!config) return null;
-		return {
-			connectionId: config.id,
-			database: config.database,
-			schema: config.dbType === "postgres" ? config.defaultSchema : "",
-		};
+		return (
+			resolveFileDatasource(
+				path,
+				sqlFiles.bindings,
+				connections.configs,
+				connections.activeId,
+			)?.datasource ?? null
+		);
 	}
 
 	/**
@@ -183,6 +179,7 @@ export function useQuickOpen(): QuickOpenPalette {
 					database: item.database,
 					schema: item.schema,
 					sql: content,
+					path: item.path,
 				});
 				// The tabs store titles every query "Query"; a file's own name is
 				// what makes several of them tellable apart.

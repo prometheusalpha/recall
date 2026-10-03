@@ -9,24 +9,13 @@
  * a handful of profiles, so one replace inside a single transaction is both
  * cheaper and harder to get wrong than row-by-row writes.
  */
-import { Database } from "bun:sqlite";
 import type { SQLQueryBindings } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
-import * as Utils from "electrobun/main/utils";
 import type {
 	ConnectionConfig,
 	ConnectionProfile,
 	DatabaseType,
 } from "../shared/types";
-
-/**
- * Folder name under the OS data dir. Electrobun exposes no path helper for
- * the bundle identifier, so this is `app.identifier` from
- * `electrobun.config.ts` — keep the two in step.
- */
-const APP_DIR = "app.recall.desktop";
-const DB_FILE = "recall.db";
+import { appDb } from "./appDb";
 
 /** One row as SQLite hands it back: booleans arrive as 0 / 1 integers. */
 interface ProfileRow {
@@ -47,25 +36,6 @@ interface ProfileRow {
 	show_system_schemas: number;
 }
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS connections (
-	id TEXT PRIMARY KEY,
-	name TEXT NOT NULL,
-	db_type TEXT NOT NULL CHECK (db_type IN ('postgres', 'mysql')),
-	host TEXT NOT NULL,
-	port INTEGER NOT NULL,
-	username TEXT NOT NULL,
-	database TEXT NOT NULL,
-	default_schema TEXT NOT NULL,
-	ssl INTEGER NOT NULL,
-	url_params TEXT NOT NULL,
-	connect_timeout_secs INTEGER NOT NULL,
-	query_timeout_secs INTEGER NOT NULL,
-	note TEXT NOT NULL,
-	save_password INTEGER NOT NULL,
-	show_system_schemas INTEGER NOT NULL,
-	position INTEGER NOT NULL
-)`;
 
 /**
  * Explicit column list, so a stray `password` on an incoming profile is dropped
@@ -80,17 +50,6 @@ INSERT INTO connections (
 	show_system_schemas, position
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-let db: Database | null = null;
-
-/** Opened on first use, then held for the lifetime of the Bun process. */
-function store(): Database {
-	if (db) return db;
-	const folder = join(Utils.paths.appData, APP_DIR);
-	mkdirSync(folder, { recursive: true });
-	db = new Database(join(folder, DB_FILE));
-	db.run(SCHEMA);
-	return db;
-}
 
 /**
  * Every stored profile, in sidebar order. `password` is always empty: the
@@ -98,7 +57,7 @@ function store(): Database {
  * fill one in when a profile asks for it.
  */
 export function listConnections(): ConnectionConfig[] {
-	const rows = store()
+	const rows = appDb()
 		.query("SELECT * FROM connections ORDER BY position")
 		.all() as ProfileRow[];
 	return rows.map((row) => ({
@@ -127,7 +86,7 @@ export function listConnections(): ConnectionConfig[] {
  * intact instead of a half-empty sidebar.
  */
 export function saveConnections(profiles: ConnectionProfile[]): void {
-	const database = store();
+	const database = appDb();
 	const wipe = database.query("DELETE FROM connections");
 	const insert = database.query(INSERT);
 	database.transaction((rows: ConnectionProfile[]) => {

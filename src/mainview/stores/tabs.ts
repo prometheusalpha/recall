@@ -14,6 +14,12 @@ export interface Tab {
 	mode: TabMode;
 	/** Committed SQL shown to the user for mode === "query". */
 	sql: string;
+	/**
+	 * Absolute path of the `.sql` file this tab came from, when it was opened
+	 * from one. A bookmark points at a file, not at a tab, so this is what
+	 * tells the editor which bookmarks belong to the document on screen.
+	 */
+	path?: string;
 	/** Snapshot taken when the tab was last saved/loaded; dirty = sql !== savedSql. */
 	savedSql: string;
 	pinned: boolean;
@@ -44,6 +50,11 @@ export interface OpenQueryTabOptions {
 	database: string;
 	schema: string;
 	sql?: string;
+	/**
+	 * Absolute path of the `.sql` file this tab is showing, when it was opened
+	 * from one. Bookmarks are keyed by path, so the editor needs it.
+	 */
+	path?: string;
 	/** Open a new tab even when one for the same target already exists. */
 	forceNew?: boolean;
 }
@@ -80,6 +91,10 @@ function isTab(value: unknown): value is Tab {
 		typeof value.sql === "string" &&
 		"savedSql" in value &&
 		typeof value.savedSql === "string" &&
+		// Tabs persisted before bookmarks existed carry no path at all.
+		(!("path" in value) ||
+			value.path === undefined ||
+			typeof value.path === "string") &&
 		"pinned" in value &&
 		typeof value.pinned === "boolean"
 	);
@@ -152,7 +167,28 @@ export const useTabsStore = defineStore("tabs", () => {
 		{ deep: true },
 	);
 
-	function sameTarget(tab: Tab, target: TabTarget): boolean {
+	/**
+	 * Whether `tab` already shows what the caller is about to open.
+	 *
+	 * A tab opened from a `.sql` file is identified by that file alone: the
+	 * path IS the document. Dedupe used to key on the connection target alone,
+	 * so two different files bound to the same datasource collided — opening
+	 * the second silently reused the first one's tab and repointed its path at
+	 * the second file, leaving the title showing B over A's text. A file is
+	 * also never the same tab as a scratch query, however well the connection
+	 * happens to match.
+	 *
+	 * A tab with no path is the other case: it is identified by the target it
+	 * runs against, which is what `forceNew` opts out of.
+	 */
+	function isSameTab(
+		tab: Tab,
+		target: TabTarget,
+		path: string | undefined,
+	): boolean {
+		if (path !== undefined || tab.path !== undefined) {
+			return path !== undefined && tab.path === path;
+		}
 		return (
 			tab.connectionId === target.connectionId &&
 			tab.database === target.database &&
@@ -166,13 +202,36 @@ export const useTabsStore = defineStore("tabs", () => {
 		if (tabs.value.some((tab) => tab.id === id)) activeTabId.value = id;
 	}
 
+	/**
+	 * Points an existing tab at `target`. Only the connection fields move: the
+	 * document, its title and its dirty state belong to the file and survive a
+	 * rebinding, so unsaved edits are never thrown away by changing datasource.
+	 */
+	function retarget(tab: Tab, target: TabTarget): void {
+		tab.connectionId = target.connectionId;
+		tab.database = target.database;
+		tab.schema = target.schema;
+	}
+
+	/**
+	 * Moves an open tab to another datasource from the UI. The document, its
+	 * title and its dirty state stay put: only where the SQL runs changes, so
+	 * unsaved edits survive a rebinding.
+	 */
+	function setTarget(id: string, target: TabTarget): void {
+		const tab = tabs.value.find((entry) => entry.id === id);
+		if (tab) retarget(tab, target);
+	}
+
 	function createTab(
 		target: TabTarget,
 		title: string,
 		sql: string,
+		path: Tab["path"],
 	): Tab {
 		return {
 			id: crypto.randomUUID(),
+			...(path ? { path } : {}),
 			title,
 			connectionId: target.connectionId,
 			database: target.database,
@@ -195,13 +254,16 @@ export const useTabsStore = defineStore("tabs", () => {
 			table: "",
 		};
 		if (!options.forceNew) {
-			const existing = tabs.value.find((tab) => sameTarget(tab, target));
+			const existing = tabs.value.find((tab) =>
+				isSameTab(tab, target, options.path),
+			);
 			if (existing) {
+				retarget(existing, target);
 				activate(existing.id);
 				return existing;
 			}
 		}
-		const tab = createTab(target, "Query", sql);
+		const tab = createTab(target, "Query", sql, options.path);
 		tabs.value.push(tab);
 		activate(tab.id);
 		return tab;
@@ -216,7 +278,9 @@ export const useTabsStore = defineStore("tabs", () => {
 			table: options.table,
 		};
 		if (!options.forceNew) {
-			const existing = tabs.value.find((tab) => sameTarget(tab, target));
+			const existing = tabs.value.find((tab) =>
+				isSameTab(tab, target, undefined),
+			);
 			if (existing) {
 				activate(existing.id);
 				return existing;
@@ -224,7 +288,7 @@ export const useTabsStore = defineStore("tabs", () => {
 		}
 		// A table tab is a read-only view; its "SQL" is the DDL snapshot, which
 		// makes it dirty-proof and lets the grid render it like any other tab.
-		const tab = createTab(target, options.table, "");
+		const tab = createTab(target, options.table, "", undefined);
 		tabs.value.push(tab);
 		activate(tab.id);
 		return tab;
@@ -341,6 +405,7 @@ export const useTabsStore = defineStore("tabs", () => {
 		activeTab,
 		isDirty,
 		openQueryTab,
+		setTarget,
 		openTableTab,
 		activate,
 		close,
