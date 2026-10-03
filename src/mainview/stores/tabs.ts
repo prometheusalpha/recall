@@ -131,6 +131,13 @@ function readPersisted(): { tabs: Tab[]; activeTabId: string | null } {
 	};
 }
 
+/** The last segment of a path, for a title. Split rather than `node:path`, so
+ * the renderer pulls in no filesystem shim for one string. */
+function basename(path: string): string {
+	const parts = path.split(/[/\\]/).filter((part) => part.length > 0);
+	return parts[parts.length - 1] ?? path;
+}
+
 export const useTabsStore = defineStore("tabs", () => {
 	const restored = readPersisted();
 	const tabs = ref<Tab[]>(restored.tabs);
@@ -388,6 +395,35 @@ export const useTabsStore = defineStore("tabs", () => {
 		if (tab) tab.title = title;
 	}
 
+	/**
+	 * Points every tab bound to `fromPath` at `toPath`; a delete/rename of the
+	 * file must not leave a tab holding a path that no longer exists.
+	 *
+	 * `toPath === null` means the file is gone: the tabs are dropped rather
+	 * than held back for unsaved SQL, because there is no longer anywhere for
+	 * it to be saved. A retarget keeps the document and its dirty state — only
+	 * where it lives and what it is called move. Tabs with no path are scratch
+	 * queries and are never touched.
+	 */
+	function repath(fromPath: string, toPath: string | null): void {
+		if (toPath === null) {
+			const kept = tabs.value.filter((tab) => tab.path !== fromPath);
+			if (kept.length === tabs.value.length) return;
+			const lostActive =
+				activeTabId.value !== null &&
+				!kept.some((tab) => tab.id === activeTabId.value);
+			tabs.value = kept;
+			if (lostActive) activeTabId.value = kept[0]?.id ?? null;
+			return;
+		}
+		const title = basename(toPath);
+		for (const tab of tabs.value) {
+			if (tab.path !== fromPath) continue;
+			tab.path = toPath;
+			tab.title = title;
+		}
+	}
+
 	function togglePin(id: string): void {
 		const tab = tabs.value.find((entry) => entry.id === id);
 		if (tab) tab.pinned = !tab.pinned;
@@ -415,6 +451,7 @@ export const useTabsStore = defineStore("tabs", () => {
 		reorder,
 		rename,
 		togglePin,
+		repath,
 		markSaved,
 	};
 });

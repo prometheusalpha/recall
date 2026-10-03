@@ -1,6 +1,12 @@
 /**
  * Filesystem layer for the "open folder" feature: scanning a directory of SQL
- * files and reading/writing them with optimistic concurrency.
+ * files, reading/writing them with optimistic concurrency, and creating,
+ * renaming, deleting, and moving/copying the entries a tree scan returned.
+ *
+ * Scanning enforces path safety (`realpathInside`, below). The mutation
+ * functions have no root to check against — they operate on paths the scan
+ * already vetted — so what keeps a mutation inside the opened folder is the
+ * name validation they all share.
  *
  * Deliberately free of `electrobun/main` so this module stays loadable by a
  * plain `bun run` process, which is how every path-safety rule below is
@@ -8,11 +14,23 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readdir, realpath, stat, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative } from "node:path";
+import {
+	cp,
+	mkdir,
+	readdir,
+	realpath,
+	rename,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type {
 	SqlFileContent,
 	SqlFileNode,
+	SqlFileOpBatchResult,
+	SqlFileOpFailure,
+	SqlFileOpResult,
 	SqlFileWriteResult,
 } from "../shared/sqlFile";
 
@@ -340,4 +358,311 @@ export async function writeSqlFile(
 		throw new Error(`Cannot save file: ${message(error)}`);
 	}
 	return { ok: true, version: versionFor(content) };
+}
+
+/** The `code` of a filesystem error, or null when it is not one. */
+function code(error: unknown): string | null {
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		typeof error.code === "string"
+	) {
+		return error.code;
+	}
+	return null;
+}
+
+/**
+ * Whether `path` is free to be written, from a single `stat`.
+ *
+ * `ENOENT` is the only error that means "free" — anything else (EACCES, EIO)
+ * means the filesystem did not answer the question, which is never a green
+ * light. Splitting those apart is what keeps a caller from turning an
+ * unreadable destination into a blind write.
+ */
+async function pathState(path: string): Promise<"free" | "taken" | "unknown"> {
+	try {
+		await stat(path);
+		return "taken";
+	} catch (error) {
+		return code(error) === "ENOENT" ? "free" : "unknown";
+	}
+}
+
+/**
+ * A single path segment, checked before it is ever joined onto a directory.
+ * Empty, `.`, `..`, anything holding a separator or a NUL is refused, which is
+ * what stops a name typed in the UI from escaping the folder it was typed in.
+ *
+ * @returns the refusal message, or null when the name is usable.
+ */
+function nameProblem(name: string): string | null {
+	if (name.trim().length === 0) {
+		return "Name cannot be empty.";
+	}
+	if (name === "." || name === "..") {
+		return `"${name}" is not a name.`;
+	}
+	if (name.includes("/") || name.includes("\\")) {
+		return "Name cannot contain a path separator.";
+	}
+	if (name.includes("\0")) {
+		return "Name cannot contain a NUL character.";
+	}
+	return null;
+}
+
+/**
+ * Creates an empty file or a directory under `parent`.
+ *
+ * `parent` is expected to be a directory that already came out of
+ * `listSqlFiles`, so it was resolved inside the opened folder by
+ * `realpathInside`; what keeps the new entry there is `nameProblem`.
+ *
+ * Both branches refuse a name already in use rather than replacing what is
+ * there: `mkdir` without `recursive` raises `EEXIST` on its own, and the file
+ * is written with the `wx` flag — exclusive create — because a plain write
+ * truncates an existing file to zero bytes and would report success while
+ * destroying the user's file.
+ *
+ * @returns the new path, or `exists` when something is already there. Never
+ * throws: a refused name is data the UI shows next to the field.
+ */
+export async function createSqlEntry(
+	parent: string,
+	name: string,
+	isDir: boolean,
+): Promise<SqlFileOpResult> {
+	const problem = nameProblem(name);
+	if (problem) {
+		return { ok: false, reason: "invalid", message: problem };
+	}
+	const path = join(parent, name);
+	try {
+		if (isDir) {
+			await mkdir(path);
+		} else {
+			await writeFile(path, "", { encoding: "utf8", flag: "wx" });
+		}
+	} catch (error) {
+		if (code(error) === "EEXIST") {
+			return {
+				ok: false,
+				reason: "exists",
+				message: `"${name}" already exists in this folder.`,
+			};
+		}
+		return { ok: false, reason: "invalid", message: message(error) };
+	}
+	return { ok: true, path };
+}
+
+/**
+ * Renames one entry in place, staying in the directory it already sits in.
+ *
+ * The path came from `listSqlFiles` (already resolved inside the opened
+ * folder); `nameProblem` is what stops the new name from leaving that
+ * directory, since a rename never changes a path's directory part.
+ *
+ * The destination is checked (`pathState`) before the rename rather than
+ * after, because POSIX `rename` atomically *replaces* an existing
+ * destination — there is no error to catch, so a collision checked only in
+ * the catch block would silently destroy the file that held the name. The
+ * `EEXIST`/`ENOTEMPTY` branches below stay as the second line of defence for
+ * the racy window between the check and the rename.
+ *
+ * @returns the new path, `missing` when the source is gone, or `exists` when
+ * the destination is taken. Never throws.
+ */
+export async function renameSqlEntry(
+	path: string,
+	name: string,
+): Promise<SqlFileOpResult> {
+	const problem = nameProblem(name);
+	if (problem) {
+		return { ok: false, reason: "invalid", message: problem };
+	}
+	const destination = join(dirname(path), name);
+	const state = await pathState(destination);
+	if (state === "taken") {
+		return {
+			ok: false,
+			reason: "exists",
+			message: `"${name}" already exists in this folder.`,
+		};
+	}
+	if (state === "unknown") {
+		return {
+			ok: false,
+			reason: "invalid",
+			message: `"${name}" could not be checked: the filesystem refused the lookup.`,
+		};
+	}
+	try {
+		await rename(path, destination);
+	} catch (error) {
+		const failure = code(error);
+		if (failure === "ENOENT") {
+			return {
+				ok: false,
+				reason: "missing",
+				message: "The entry no longer exists.",
+			};
+		}
+		if (failure === "EEXIST" || failure === "ENOTEMPTY") {
+			return {
+				ok: false,
+				reason: "exists",
+				message: `"${name}" already exists in this folder.`,
+			};
+		}
+		return { ok: false, reason: "invalid", message: message(error) };
+	}
+	return { ok: true, path: destination };
+}
+
+/**
+ * Deletes one entry, recursively for a directory.
+ *
+ * The path came from `listSqlFiles` and was resolved inside the opened
+ * folder; deleting is not given a name to validate because it only ever
+ * removes exactly the path it was handed.
+ *
+ * @returns `missing` when there was nothing to delete — a tree refreshed
+ * behind the user's back is not an error they caused. Never throws.
+ */
+export async function deleteSqlEntry(
+	path: string,
+): Promise<SqlFileOpResult> {
+	try {
+		await rm(path, { recursive: true, force: false });
+	} catch (error) {
+		if (code(error) === "ENOENT") {
+			return {
+				ok: false,
+				reason: "missing",
+				message: "The entry no longer exists.",
+			};
+		}
+		return { ok: false, reason: "invalid", message: message(error) };
+	}
+	return { ok: true, path };
+}
+
+/**
+ * Copies (`move: false`) or moves (`move: true`) each entry into
+ * `destination`. Per-entry rather than all-or-nothing: one refused entry lands
+ * in `failures` and the rest still land in `moved`.
+ *
+ * Both arguments are expected to come from `listSqlFiles`, which already
+ * resolved them inside the opened folder. The destination is only ever
+ * appended to, never derived from a name, and a destination inside its own
+ * source is refused — copying a directory into itself would otherwise recurse
+ * until the disk filled.
+ *
+ * @returns one `{ from, to }` per entry that landed, in request order, each
+ * naming the source it came from — that pairing is what lets a caller repair
+ * state keyed on the old path, and it survives a partial batch because every
+ * entry names its own source rather than relying on position. Never throws.
+ */
+export async function transferSqlEntries(
+	sources: string[],
+	destination: string,
+	move: boolean,
+): Promise<SqlFileOpBatchResult> {
+	const moved: { from: string; to: string }[] = [];
+	const failures: SqlFileOpFailure[] = [];
+
+	for (const source of sources) {
+		const name = source.slice(source.lastIndexOf("/") + 1);
+		const target = join(destination, name);
+		const refusal = await transferRefusal(source, target, destination);
+		if (refusal) {
+			failures.push({ path: source, message: refusal });
+			continue;
+		}
+		const failure = move
+			? await moveEntry(source, target)
+			: await copyEntry(source, target);
+		if (failure) {
+			failures.push({ path: source, message: failure });
+			continue;
+		}
+		moved.push({ from: source, to: target });
+	}
+
+	return { moved, failures };
+}
+
+/**
+ * Copies one entry into place.
+ *
+ * @returns the failure message, or null on success.
+ */
+async function copyEntry(
+	source: string,
+	target: string,
+): Promise<string | null> {
+	try {
+		await cp(source, target, { recursive: true });
+		return null;
+	} catch (error) {
+		return message(error);
+	}
+}
+
+/**
+ * Moves one entry into place. `rename` is the cheap path; it cannot cross a
+ * filesystem boundary, so EXDEV falls back to a copy followed by a removal.
+ *
+ * @returns the failure message, or null on success.
+ */
+async function moveEntry(
+	source: string,
+	target: string,
+): Promise<string | null> {
+	try {
+		await rename(source, target);
+		return null;
+	} catch (error) {
+		if (code(error) !== "EXDEV") {
+			return message(error);
+		}
+		const copied = await copyEntry(source, target);
+		if (copied) {
+			return copied;
+		}
+		try {
+			await rm(source, { recursive: true, force: true });
+		} catch (removalError) {
+			return `The copy succeeded but the original could not be removed: ${message(removalError)}`;
+		}
+		return null;
+	}
+}
+
+/**
+ * Why one entry cannot be transferred, or null when it can. Checked before any
+ * filesystem write so a refusal never leaves half a copy behind.
+ */
+async function transferRefusal(
+	source: string,
+	target: string,
+	destination: string,
+): Promise<string | null> {
+	if (destination === source || destination.startsWith(`${source}/`)) {
+		return "An entry cannot be moved into itself.";
+	}
+	try {
+		await stat(source);
+	} catch (error) {
+		return code(error) === "ENOENT"
+			? "The entry no longer exists."
+			: message(error);
+	}
+	if ((await pathState(target)) === "taken") {
+		return `"${target.slice(target.lastIndexOf("/") + 1)}" already exists in the destination.`;
+	}
+	return null;
 }

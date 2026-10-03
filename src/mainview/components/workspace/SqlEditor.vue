@@ -21,12 +21,13 @@ import {
 import { useConnectionsStore } from "../../stores/connections";
 import { useQueryStore } from "../../stores/query";
 import { useTabsStore } from "../../stores/tabs";
+import type { Tab } from "../../stores/tabs";
 import { useSnippetsStore } from "../../stores/snippets";
 import { useBookmarksStore } from "../../stores/bookmarks";
 import { useSqlFilesStore } from "../../stores/sqlFiles";
 import { useTheme } from "../../composables/useTheme";
 import { splitSqlStatements } from "../../lib/sqlSplit";
-import { errorMessage } from "../../lib/rpc";
+import { errorMessage, rpc, RPC_TIMEOUTS } from "../../lib/rpc";
 import type { ConnectionConfig, DatabaseType } from "../../../shared/types";
 import type * as CmView from "@codemirror/view";
 import type * as CmState from "@codemirror/state";
@@ -50,6 +51,15 @@ import {
 	DropdownMenuSubTrigger,
 } from "../ui/dropdown-menu";
 import { toast } from "../../composables/useToast";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../ui/dialog";
+import { Input } from "../ui/input";
 import { snippetCompletionSource } from "../editor/SqlCompletionSource";
 
 /* -------------------------------------------------------------------------
@@ -296,6 +306,30 @@ function toggleRun(): void {
 	else run();
 }
 
+/**
+ * `Mod-Enter` with something selected runs just the selection.
+ *
+ * A selection is how a user says "these two statements, not the whole file",
+ * and running the rest of the document alongside it is how a DDL batch turns
+ * into an accident. A whitespace-only selection counts as no selection, and
+ * a run in flight always wins: the chord is a toggle first, and stopping a
+ * query the user is watching is never what they meant to replace.
+ */
+function runSelection(): void {
+	if (running.value) {
+		stop();
+		return;
+	}
+	const id = activeTabId.value;
+	if (!id) return;
+	const selected = editor?.selection().trim() ?? "";
+	if (selected.length === 0) {
+		toggleRun();
+		return;
+	}
+	void queryStore.run(id, { sqlOverride: selected });
+}
+
 /* -------------------------------------------------------------------------
  * Datasource picker
  *
@@ -442,6 +476,198 @@ async function chooseDatasource(
 }
 
 /* -------------------------------------------------------------------------
+ * Saving
+ *
+ * A file-backed tab writes itself out 1.5s after the last keystroke. The
+ * delay is what makes it autosave rather than a write per character; the
+ * optimistic-concurrency token behind `save` is what makes it safe, since a
+ * file edited outside the app comes back as a conflict rather than as
+ * somebody else's work being overwritten.
+ *
+ * An untitled query tab has no file to write to, so it never autosaves —
+ * `Mod-s` is what turns it into one.
+ * ---------------------------------------------------------------------- */
+
+/** How long the document has to be still before it is written to disk. */
+const AUTOSAVE_MS = 1500;
+
+/**
+ * One pending timer per tab id. Keying by tab rather than by component is
+ * what lets a tab switch leave another tab's pending save alone: the text
+ * being saved is the text of the tab that earned it.
+ */
+const pendingSaves = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Tabs whose last write was refused. Autosave stays off for these until the
+ * user edits again, so a file that changed on disk is not overwritten by the
+ * next keystroke after the warning.
+ */
+const saveBlocked = new Set<string>();
+
+const saveAsOpen = ref(false);
+const saveAsName = ref("");
+const saveAsError = ref("");
+
+/**
+ * What the SQL watcher last saw: the tab on screen and its text. A change
+ * that keeps the tab id is a keystroke; one that changes it is a tab switch,
+ * which brings different text with no typing behind it.
+ */
+let lastEdit: { tabId: string | null; sql: string } = {
+	tabId: activeTabId.value,
+	sql: activeTab.value?.sql ?? "",
+};
+
+/** Drops a tab's pending write, so it cannot race a write the user asked for. */
+function cancelPendingSave(tabId: string): void {
+	const timer = pendingSaves.get(tabId);
+	if (timer === undefined) return;
+	clearTimeout(timer);
+	pendingSaves.delete(tabId);
+}
+
+/**
+ * Writes one tab and reports what happened.
+ *
+ * `save` returns its refusals as data rather than throwing, and each one is
+ * an outcome the user has to hear about: the tab stays dirty either way, so
+ * the unsaved edits are never dropped on the floor.
+ */
+async function saveTab(tabId: string): Promise<void> {
+	const tab = tabsStore.tabs.find((entry) => entry.id === tabId);
+	if (!tab?.path) return;
+	try {
+		const result = await sqlFilesStore.save(tab.path, tab.sql);
+		if (result.ok) {
+			saveBlocked.delete(tabId);
+			tabsStore.markSaved(tabId);
+			return;
+		}
+		saveBlocked.add(tabId);
+		toast(
+			result.reason === "conflict"
+				? "That file changed on disk — your edits were not written. Save over it from the File menu to replace it."
+				: "The file is no longer on disk — it was deleted or moved.",
+			8000,
+		);
+	} catch (err) {
+		saveBlocked.add(tabId);
+		toast(errorMessage(err));
+	}
+}
+
+function scheduleSave(tab: Tab): void {
+	// A table tab is a read-only view of someone else's data, and a query tab
+	// with no path is a scratch buffer: neither has a file to write to.
+	if (!tab.path || tab.mode === "table") return;
+	cancelPendingSave(tab.id);
+	pendingSaves.set(
+		tab.id,
+		setTimeout(() => {
+			pendingSaves.delete(tab.id);
+			void saveTab(tab.id);
+		}, AUTOSAVE_MS),
+	);
+}
+
+/**
+ * `Mod-s`: writes the file now. A tab with no path has nothing to write, so
+ * the same chord asks where the document should live instead.
+ */
+function saveActiveTab(): boolean {
+	const tab = activeTab.value;
+	if (!tab || tab.mode === "table") return true;
+	cancelPendingSave(tab.id);
+	saveBlocked.delete(tab.id);
+	if (tab.path) {
+		void saveTab(tab.id);
+		return true;
+	}
+	beginSaveAs();
+	return true;
+}
+
+/** Opens Save As with the tab's own name as the starting point. */
+function beginSaveAs(): void {
+	const tab = activeTab.value;
+	if (!tab) return;
+	const folder = sqlFilesStore.folders[0];
+	if (!folder) {
+		// A new file has to land inside a tree the user has already opened:
+		// inventing a location outside one would put it somewhere the Files
+		// panel can never show them again.
+		toast(
+			"Open a folder in the Files panel first — a new file has to go somewhere.",
+			6000,
+		);
+		return;
+	}
+	saveAsName.value = tab.title.endsWith(".sql")
+		? tab.title
+		: `${tab.title}.sql`;
+	saveAsError.value = "";
+	saveAsOpen.value = true;
+}
+
+/**
+ * Creates the file at the name the user confirmed, then adopts it: the tab
+ * takes the path, takes the file's name as its title, and is marked saved.
+ * `expectedVersion: null` is "create this, and refuse if something is
+ * already there", so Save As can never overwrite a file it never opened.
+ */
+async function confirmSaveAs(): Promise<void> {
+	const tab = activeTab.value;
+	const folder = sqlFilesStore.folders[0];
+	const name = saveAsName.value.trim();
+	if (!tab || !folder || name.length === 0) return;
+	// `writeSqlFile` takes a whole path and, unlike the tree's own create
+	// operation, does not vet the last segment itself — so a name holding a
+	// separator would put the file outside the folder the user picked.
+	if (
+		name.includes("/") ||
+		name.includes("\\") ||
+		name === "." ||
+		name === ".."
+	) {
+		saveAsError.value = "A file name cannot contain a path separator.";
+		return;
+	}
+	const path = folder.endsWith("/") ? `${folder}${name}` : `${folder}/${name}`;
+	try {
+		const result = await rpc.request.writeSqlFile(
+			{ path, content: tab.sql, expectedVersion: null },
+			{ maxRequestTime: RPC_TIMEOUTS.metadata },
+		);
+		if (!result.ok) {
+			saveAsError.value =
+				result.reason === "conflict"
+					? "A file with that name already exists."
+					: "That file is no longer on disk.";
+			return;
+		}
+		// The file was created behind the store's back, so it holds no version
+		// token for this path yet. `read` re-earns one, which is what lets the
+		// next autosave be a guarded write rather than a permanent conflict
+		// against a file the app itself just created.
+		await sqlFilesStore.read(path);
+		tab.path = path;
+		tabsStore.rename(tab.id, name);
+		tabsStore.markSaved(tab.id);
+		saveAsError.value = "";
+		saveAsOpen.value = false;
+		saveBlocked.delete(tab.id);
+		// Bookmarks point at a file; this tab now has one, so its gutter is
+		// showing the marks of a document that did not exist a moment ago.
+		editor?.refreshBookmarks();
+		// The new file is not in the scan the tree on screen is showing.
+		await sqlFilesStore.refresh(folder);
+	} catch (err) {
+		saveAsError.value = errorMessage(err);
+	}
+}
+
+/* -------------------------------------------------------------------------
  * EditorView lifecycle
  *
  * The view and its compartments live in the closure created by `mountEditor`;
@@ -464,6 +690,12 @@ interface EditorHandle {
 	currentLine(): number;
 	/** The text of a one-based line, which is what a bookmark is digested from. */
 	lineText(line: number): string;
+	/**
+	 * The selected text, or an empty string when the selection is
+	 * empty/cursor-only. This is the only way out of the closure for the
+	 * selection itself: the `EditorView` never escapes it.
+	 */
+	selection(): string;
 	/** Redraws the bookmark gutter after the store changed. */
 	refreshBookmarks(): void;
 	/** Tears the view down; its element goes away with the component. */
@@ -706,9 +938,14 @@ async function mountEditor(): Promise<void> {
 						key: "Mod-Enter",
 						preventDefault: true,
 						run: () => {
-							toggleRun();
+							runSelection();
 							return true;
 						},
+					},
+					{
+						key: "Mod-s",
+						preventDefault: true,
+						run: () => saveActiveTab(),
 					},
 					...commands.defaultKeymap,
 					...search.searchKeymap,
@@ -761,6 +998,13 @@ async function mountEditor(): Promise<void> {
 			const doc = editorView.state.doc;
 			return doc.line(Math.min(Math.max(line, 1), doc.lines)).text;
 		},
+		selection() {
+			// The main range is the selection every ordinary interaction makes.
+			// A cursor is an empty range, and an empty string is what the caller
+			// reads as "run the whole document".
+			const main = editorView.state.selection.main;
+			return main.empty ? "" : editorView.state.sliceDoc(main.from, main.to);
+		},
 		refreshBookmarks() {
 			editorView.dispatch({ effects: redrawBookmarks.of(null) });
 		},
@@ -782,9 +1026,43 @@ async function mountEditor(): Promise<void> {
 
 onMounted(() => {
 	void mountEditor();
+	window.addEventListener("keydown", onWindowSave);
 });
 
+/**
+ * `Mod-s` for the whole window, not just the editor.
+ *
+ * A CodeMirror keymap only sees a key when the editor holds focus, so saving
+ * from the file tree, a dialog or the tab strip would otherwise do nothing at
+ * all. The editor's own binding handles the focused case first and calls
+ * `preventDefault`; this only catches the rest. Typing into a text field is
+ * left alone — an input is somewhere the user is typing a name, not somewhere
+ * they are asking the app to write a file.
+ */
+function onWindowSave(event: KeyboardEvent): void {
+	if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+	if (event.key !== "s" && event.key !== "S") return;
+	if (event.defaultPrevented) return;
+	const target = event.target;
+	if (
+		target instanceof HTMLElement &&
+		(target.isContentEditable ||
+			target.tagName === "INPUT" ||
+			target.tagName === "TEXTAREA")
+	) {
+		return;
+	}
+	if (!activeTab.value || activeTab.value.mode === "table") return;
+	event.preventDefault();
+	saveActiveTab();
+}
+
 onBeforeUnmount(() => {
+	// A pending autosave outliving the component would write through a store
+	// the window is tearing down, and so would the window listener.
+	for (const timer of pendingSaves.values()) clearTimeout(timer);
+	pendingSaves.clear();
+	window.removeEventListener("keydown", onWindowSave);
 	editor?.destroy();
 	editor = null;
 	editorReady.value = false;
@@ -841,6 +1119,34 @@ watch(
 	() => editor?.refreshBookmarks(),
 	{ deep: true },
 );
+
+/**
+ * Autosave. `docChanged` has already written the new text back to `tab.sql`,
+ * so the store's copy of the active tab is the single source of what is on
+ * screen — there is no second write path here.
+ *
+ * The tab id is watched alongside the SQL because a tab switch changes the
+ * text on screen without anything having been typed: only a change that
+ * leaves the tab id alone is a keystroke, and whatever the tab being left
+ * behind owed its file is already sitting in its own timer.
+ */
+watch(
+	() => [activeTabId.value, activeTab.value?.sql ?? ""] as const,
+	(next) => {
+		const [tabId, sql] = next;
+		const edited = tabId !== null && tabId === lastEdit.tabId;
+		lastEdit = { tabId, sql };
+		if (!edited) return;
+		// A refusal turned autosave off for this tab; the keystroke after it
+		// is the user deciding to try again, and the one after that writes.
+		if (saveBlocked.has(tabId)) {
+			saveBlocked.delete(tabId);
+			return;
+		}
+		const tab = tabsStore.tabs.find((entry) => entry.id === tabId);
+		if (tab) scheduleSave(tab);
+	},
+);
 </script>
 
 <template>
@@ -891,38 +1197,42 @@ watch(
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end" class="w-64">
 					<DropdownMenuLabel>Run against</DropdownMenuLabel>
-					<DropdownMenuSub
-						v-for="connection in connectionsStore.configs"
-						:key="connection.id"
-					>
-						<DropdownMenuSubTrigger
-							:class="{
-								'font-semibold': connection.id === activeTab?.connectionId,
-							}"
-							@pointerenter="loadDatabases(connection)"
+					<div class="max-h-[min(60vh,24rem)] overflow-y-auto overscroll-contain">
+						<DropdownMenuSub
+							v-for="connection in connectionsStore.configs"
+							:key="connection.id"
 						>
-							{{ connection.name }}
-						</DropdownMenuSubTrigger>
-						<DropdownMenuSubContent>
-							<DropdownMenuItem
-								v-for="database in databasesFor(connection)"
-								:key="database"
-								:data-current="isCurrentTarget(connection, database) ? 'true' : undefined"
-								class="gap-2"
-								@select="chooseDatasource(connection, database)"
+							<DropdownMenuSubTrigger
+								:class="{
+									'font-semibold': connection.id === activeTab?.connectionId,
+								}"
+								@pointerenter="loadDatabases(connection)"
 							>
-								<Check
-									aria-hidden="true"
-									class="size-3 shrink-0"
-									:class="isCurrentTarget(connection, database) ? '' : 'invisible'"
-								/>
-								<span class="truncate">{{ database }}</span>
-							</DropdownMenuItem>
-							<DropdownMenuItem v-if="databasesFor(connection).length === 0" disabled>
-								No databases
-							</DropdownMenuItem>
-						</DropdownMenuSubContent>
-					</DropdownMenuSub>
+								{{ connection.name }}
+							</DropdownMenuSubTrigger>
+							<DropdownMenuSubContent>
+								<div class="max-h-[min(50vh,20rem)] overflow-y-auto overscroll-contain">
+									<DropdownMenuItem
+										v-for="database in databasesFor(connection)"
+										:key="database"
+										:data-current="isCurrentTarget(connection, database) ? 'true' : undefined"
+										class="gap-2"
+										@select="chooseDatasource(connection, database)"
+									>
+										<Check
+											aria-hidden="true"
+											class="size-3 shrink-0"
+											:class="isCurrentTarget(connection, database) ? '' : 'invisible'"
+										/>
+										<span class="truncate">{{ database }}</span>
+									</DropdownMenuItem>
+									<DropdownMenuItem v-if="databasesFor(connection).length === 0" disabled>
+										No databases
+									</DropdownMenuItem>
+								</div>
+							</DropdownMenuSubContent>
+						</DropdownMenuSub>
+					</div>
 					<DropdownMenuSeparator />
 					<p class="px-2 py-1 text-[11px] text-muted-foreground">
 						{{ activeTab?.path ? "Saved with this file" : "This tab only" }}
@@ -939,5 +1249,46 @@ watch(
 				Loading editor…
 			</p>
 		</div>
+
+		<!-- Save As: a tab with no path has no file yet, and `Mod-s` is the
+		     chord that asks for one. The name is the only thing being decided
+		     here — the folder is the first one already open in the Files
+		     panel, so the file lands somewhere the user can see it. -->
+		<Dialog v-model:open="saveAsOpen">
+			<DialogContent class="sm:max-w-md">
+				<DialogHeader>
+					<DialogTitle>Save SQL as</DialogTitle>
+					<DialogDescription>
+						Writes this query to a new file in the first folder open in
+						the Files panel.
+					</DialogDescription>
+				</DialogHeader>
+				<Input
+					:model-value="saveAsName"
+					spellcheck="false"
+					autocomplete="off"
+					aria-label="File name"
+					@update:model-value="saveAsName = String($event)"
+					@keydown.enter="confirmSaveAs"
+				/>
+				<p
+					v-if="saveAsError"
+					class="text-xs text-destructive"
+					role="alert"
+				>
+					{{ saveAsError }}
+				</p>
+				<DialogFooter>
+					<Button variant="ghost" @click="saveAsOpen = false">Cancel</Button>
+					<Button
+						variant="default"
+						:disabled="saveAsName.trim().length === 0"
+						@click="confirmSaveAs"
+					>
+						Save
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	</div>
 </template>

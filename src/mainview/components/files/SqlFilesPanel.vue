@@ -1,11 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import {
+	ClipboardPaste,
 	Copy,
+	CopyPlus,
+	FilePlus2,
+	FolderOpen,
 	FolderPlus,
 	FolderSearch,
 	PanelRightClose,
 	PanelRightOpen,
+	Pencil,
+	Scissors,
+	Trash2,
 } from "lucide-vue-next";
 import type { ConnectionConfig } from "../../../shared/types";
 import type { FileDatasource, SqlFileNode } from "../../../shared/sqlFile";
@@ -29,6 +36,14 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Input } from "../ui/input";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../ui/dialog";
 import FileTreeNode from "./FileTreeNode.vue";
 
 /**
@@ -74,8 +89,13 @@ function restore(): void {
 	width.value = RESTORED_WIDTH;
 }
 
-/** The file whose tab is on screen, so its row can show as selected. */
-const activePath = ref<string | null>(null);
+/**
+ * The file whose tab is on screen, so its row can show as selected. Derived
+ * from the tabs rather than remembered here, so a rename follows the file and
+ * a delete drops the highlight without this panel being told about either.
+ */
+const activePath = computed(() => tabs.activeTab?.path ?? null);
+
 /** The node the context menu was opened on, null while the menu is closed. */
 const menuNode = ref<SqlFileNode | null>(null);
 const menuOpen = ref(false);
@@ -86,6 +106,46 @@ const menuOpen = ref(false);
  * menu is opened by the right-click handler, never by clicking this.
  */
 const menuAnchor = ref({ x: 0, y: 0 });
+
+/**
+ * The directory the toolbar's create buttons act on: the one holding the row
+ * the user last right-clicked or opened, null until they touch a row.
+ */
+const contextDir = ref<string | null>(null);
+/** The create prompt: what is being made, where, and under what name. */
+const createOpen = ref(false);
+const createParent = ref("");
+const createIsDir = ref(false);
+const createName = ref("");
+/** The pending delete, held until the confirmation is answered. */
+const deleteTarget = ref<SqlFileNode | null>(null);
+
+/** The directory holding `path`. Scan paths are absolute and `/`-separated. */
+function parentOf(path: string): string {
+	const index = path.lastIndexOf("/");
+	return index > 0 ? path.slice(0, index) : path;
+}
+
+/** The last segment of a path: what a row is called. */
+function nameOf(path: string): string {
+	return path.slice(path.lastIndexOf("/") + 1);
+}
+
+/**
+ * Remembers which directory the user is working in. A file counts as its
+ * directory, so "New file" after clicking a file lands beside it; an
+ * unopened panel falls back to the first folder, which is where everything
+ * in the tree lives anyway.
+ */
+function rememberContext(node: SqlFileNode): void {
+	contextDir.value = node.isDir ? node.path : parentOf(node.path);
+}
+
+/** Where the toolbar's create buttons act, or null when no folder is open. */
+function toolbarDir(): string | null {
+	if (contextDir.value) return contextDir.value;
+	return sqlFiles.folders[0] ?? null;
+}
 
 /**
  * Files whose datasource was guessed rather than bound. Each is named once, so
@@ -141,7 +201,7 @@ function applyFilter(): void {
 }
 
 function onMenu(node: SqlFileNode, event: MouseEvent): void {
-	if (node.isDir) return;
+	rememberContext(node);
 	menuNode.value = node;
 	menuAnchor.value = { x: event.clientX, y: event.clientY };
 	menuOpen.value = true;
@@ -178,6 +238,7 @@ function resolveDatasource(path: string): FileDatasource | null {
 
 /** Opens a file as a query tab against its bound (or fallback) datasource. */
 async function onActivate(node: SqlFileNode): Promise<void> {
+	rememberContext(node);
 	if (node.isDir) {
 		sqlFiles.toggleExpanded(node.path);
 		return;
@@ -201,7 +262,6 @@ async function onActivate(node: SqlFileNode): Promise<void> {
 		// The tabs store titles every query "Query"; a file's own name is far
 		// more useful once several are open at once.
 		tabs.rename(tab.id, node.name);
-		activePath.value = node.path;
 	} catch (err) {
 		toast(errorMessage(err));
 	}
@@ -245,6 +305,128 @@ async function copyPath(): Promise<void> {
 		toast("Could not copy the path");
 	}
 }
+
+/** Puts the row into inline rename; the row itself owns the field. */
+function startRename(): void {
+	const node = menuNode.value;
+	if (!node) return;
+	sqlFiles.renamingPath = node.path;
+}
+
+/**
+ * Commits the inline rename. The field is torn down first: a refused name is
+ * a toast, and the row keeps the name the backend still has, so leaving the
+ * field open over a name that does not exist would be worse.
+ */
+async function commitRename(path: string, name: string): Promise<void> {
+	if (sqlFiles.renamingPath !== path) return;
+	sqlFiles.renamingPath = null;
+	const next = name.trim();
+	// An empty name is a cancellation, not a request to delete the file.
+	if (next.length === 0 || next === nameOf(path)) return;
+	try {
+		await sqlFiles.renameEntry(path, next);
+	} catch (err) {
+		toast(errorMessage(err));
+	}
+}
+
+function cancelRename(path: string): void {
+	if (sqlFiles.renamingPath === path) sqlFiles.renamingPath = null;
+}
+
+function cutFromMenu(): void {
+	const node = menuNode.value;
+	if (node) sqlFiles.cut([node.path]);
+}
+
+function copyFromMenu(): void {
+	const node = menuNode.value;
+	if (node) sqlFiles.copy([node.path]);
+}
+
+/** Pastes into a directory: itself for a directory row, its parent for a file. */
+async function pasteFromMenu(): Promise<void> {
+	const node = menuNode.value;
+	if (!node) return;
+	const destination = node.isDir ? node.path : parentOf(node.path);
+	try {
+		await sqlFiles.paste(destination);
+	} catch (err) {
+		toast(errorMessage(err));
+	}
+}
+
+async function duplicateFromMenu(): Promise<void> {
+	const node = menuNode.value;
+	if (!node) return;
+	try {
+		await sqlFiles.duplicateEntry(node.path);
+	} catch (err) {
+		toast(errorMessage(err));
+	}
+}
+
+/** Opens the name prompt for a new file or folder under `parent`. */
+function startCreate(parent: string, isDir: boolean): void {
+	createParent.value = parent;
+	createIsDir.value = isDir;
+	createName.value = "";
+	createOpen.value = true;
+}
+
+/** The directory row's own create items, which act on that directory. */
+function createInMenu(isDir: boolean): void {
+	const node = menuNode.value;
+	if (!node || !node.isDir) return;
+	startCreate(node.path, isDir);
+}
+
+/** The toolbar's create buttons, acting where the user last was. */
+function startCreateHere(isDir: boolean): void {
+	const parent = toolbarDir();
+	if (!parent) {
+		toast("Open a folder first");
+		return;
+	}
+	startCreate(parent, isDir);
+}
+
+async function submitCreate(): Promise<void> {
+	const name = createName.value.trim();
+	if (name.length === 0) {
+		toast("Name the new entry first");
+		return;
+	}
+	createOpen.value = false;
+	try {
+		await sqlFiles.createEntry(createParent.value, name, createIsDir.value);
+	} catch (err) {
+		toast(errorMessage(err));
+	}
+}
+
+/** Holds the row until the confirmation is answered; nothing is deleted yet. */
+function askDelete(): void {
+	deleteTarget.value = menuNode.value;
+}
+
+function setDeleteOpen(open: boolean): void {
+	if (!open) deleteTarget.value = null;
+}
+
+async function confirmDelete(): Promise<void> {
+	const node = deleteTarget.value;
+	deleteTarget.value = null;
+	// A nameless target is not a thing the tree can produce; refuse rather
+	// than hand the backend an empty path to act on.
+	if (!node || node.name.length === 0) return;
+	try {
+		await sqlFiles.deleteEntry(node.path);
+	} catch (err) {
+		toast(errorMessage(err));
+	}
+}
 </script>
 
 <template>
@@ -276,10 +458,28 @@ async function copyPath(): Promise<void> {
 				size="icon"
 				variant="ghost"
 				class="h-6 w-6"
+				aria-label="New file"
+				@click="startCreateHere(false)"
+			>
+				<FilePlus2 aria-hidden="true" />
+			</Button>
+			<Button
+				size="icon"
+				variant="ghost"
+				class="h-6 w-6"
+				aria-label="New folder"
+				@click="startCreateHere(true)"
+			>
+				<FolderPlus aria-hidden="true" />
+			</Button>
+			<Button
+				size="icon"
+				variant="ghost"
+				class="h-6 w-6"
 				aria-label="Open folder"
 				@click="openFolder"
 			>
-				<FolderPlus aria-hidden="true" />
+				<FolderOpen aria-hidden="true" />
 			</Button>
 			<Button
 				size="icon"
@@ -332,9 +532,12 @@ async function copyPath(): Promise<void> {
 					:expanded="sqlFiles.expanded.has(node.path)"
 					:expanded-paths="sqlFiles.expanded"
 					:active-path="activePath"
+					:renaming-path="sqlFiles.renamingPath"
 					@toggle="sqlFiles.toggleExpanded"
 					@activate="onActivate"
 					@menu="onMenu"
+					@commit-rename="commitRename"
+					@cancel-rename="cancelRename"
 				/>
 			</div>
 
@@ -353,32 +556,142 @@ async function copyPath(): Promise<void> {
 					/>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent class="w-56">
-					<DropdownMenuItem @select="openFromMenu">Open</DropdownMenuItem>
-					<DropdownMenuItem @select="reveal">
-						<FolderSearch aria-hidden="true" />
-						Reveal in Finder
-					</DropdownMenuItem>
-					<DropdownMenuItem @select="copyPath">
-						<Copy aria-hidden="true" />
-						Copy Path
-					</DropdownMenuItem>
-					<DropdownMenuSeparator />
-					<DropdownMenuSub>
-						<DropdownMenuSubTrigger>Datasource</DropdownMenuSubTrigger>
-						<DropdownMenuSubContent>
-							<DropdownMenuLabel>Run against</DropdownMenuLabel>
-							<DropdownMenuItem
-								v-for="choice in datasourceChoices"
-								:key="`${choice.connection.id}:${choice.database}`"
-								@select="chooseDatasource(choice)"
-							>
-								{{ choice.connection.name }} / {{ choice.database }}
-							</DropdownMenuItem>
-						</DropdownMenuSubContent>
-					</DropdownMenuSub>
+					<!-- A directory cannot be opened, revealed or bound to a
+					     datasource, so its menu is about the directory itself. -->
+					<template v-if="menuNode?.isDir">
+						<DropdownMenuItem @select="createInMenu(false)">
+							<FilePlus2 aria-hidden="true" />
+							New file here…
+						</DropdownMenuItem>
+						<DropdownMenuItem @select="createInMenu(true)">
+							<FolderPlus aria-hidden="true" />
+							New folder here…
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem @select="cutFromMenu">
+							<Scissors aria-hidden="true" />
+							Cut
+						</DropdownMenuItem>
+						<DropdownMenuItem @select="copyFromMenu">
+							<Copy aria-hidden="true" />
+							Copy
+						</DropdownMenuItem>
+						<DropdownMenuItem
+							:disabled="sqlFiles.clipboard === null"
+							@select="pasteFromMenu"
+						>
+							<ClipboardPaste aria-hidden="true" />
+							Paste
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem @select="startRename">
+							<Pencil aria-hidden="true" />
+							Rename…
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem variant="destructive" @select="askDelete">
+							<Trash2 aria-hidden="true" />
+							Delete
+						</DropdownMenuItem>
+					</template>
+
+					<template v-else>
+						<DropdownMenuItem @select="openFromMenu">Open</DropdownMenuItem>
+						<DropdownMenuItem @select="startRename">
+							<Pencil aria-hidden="true" />
+							Rename…
+						</DropdownMenuItem>
+						<DropdownMenuItem @select="duplicateFromMenu">
+							<CopyPlus aria-hidden="true" />
+							Duplicate
+						</DropdownMenuItem>
+						<DropdownMenuItem @select="cutFromMenu">
+							<Scissors aria-hidden="true" />
+							Cut
+						</DropdownMenuItem>
+						<DropdownMenuItem @select="copyFromMenu">
+							<Copy aria-hidden="true" />
+							Copy
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem @select="reveal">
+							<FolderSearch aria-hidden="true" />
+							Reveal in Finder
+						</DropdownMenuItem>
+						<DropdownMenuItem @select="copyPath">
+							<Copy aria-hidden="true" />
+							Copy Path
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
+						<DropdownMenuSub>
+							<DropdownMenuSubTrigger>Datasource</DropdownMenuSubTrigger>
+							<DropdownMenuSubContent>
+								<DropdownMenuLabel>Run against</DropdownMenuLabel>
+								<DropdownMenuItem
+									v-for="choice in datasourceChoices"
+									:key="`${choice.connection.id}:${choice.database}`"
+									@select="chooseDatasource(choice)"
+								>
+									{{ choice.connection.name }} / {{ choice.database }}
+								</DropdownMenuItem>
+							</DropdownMenuSubContent>
+						</DropdownMenuSub>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem variant="destructive" @select="askDelete">
+							<Trash2 aria-hidden="true" />
+							Delete
+						</DropdownMenuItem>
+					</template>
 				</DropdownMenuContent>
 			</DropdownMenu>
 		</template>
+
+		<!-- Both dialogs live outside the tree so a scrolled or collapsed panel
+		     never takes the prompt with it. -->
+		<Dialog v-model:open="createOpen">
+			<DialogContent class="sm:max-w-md">
+				<DialogHeader>
+					<DialogTitle>{{ createIsDir ? "New folder" : "New file" }}</DialogTitle>
+					<DialogDescription>
+						{{ createIsDir
+							? "Folders can be nested, and can hold other folders."
+							: "SQL files show up in the tree as soon as they match the filter." }}
+					</DialogDescription>
+				</DialogHeader>
+
+				<Input
+					v-model="createName"
+					:aria-label="createIsDir ? 'Folder name' : 'File name'"
+					placeholder="queries.sql"
+					spellcheck="false"
+					autocomplete="off"
+					@keydown.enter.prevent="submitCreate"
+				/>
+
+				<DialogFooter>
+					<Button variant="ghost" @click="createOpen = false">Cancel</Button>
+					<Button @click="submitCreate">Create</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+
+		<Dialog :open="deleteTarget !== null" @update:open="setDeleteOpen">
+			<DialogContent class="sm:max-w-md">
+				<DialogHeader>
+					<DialogTitle>Delete {{ deleteTarget?.name }}?</DialogTitle>
+					<DialogDescription>
+						{{ deleteTarget?.isDir
+							? "The folder and everything inside it are removed. "
+							: "" }}This cannot be undone.
+					</DialogDescription>
+				</DialogHeader>
+
+				<DialogFooter>
+					<Button variant="ghost" @click="deleteTarget = null">Cancel</Button>
+					<Button variant="destructive" @click="confirmDelete">Delete</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 		</div>
 		<div
 			class="panel-resize-handle panel-resize-handle--left"

@@ -8,6 +8,7 @@ import type {
 } from "../../shared/sqlFile";
 import { toast } from "../composables/useToast";
 import { errorMessage, RPC_TIMEOUTS, rpc } from "../lib/rpc";
+import { useTabsStore } from "./tabs";
 
 const FOLDERS_KEY = "recall.sqlFileFolders";
 const FILTER_KEY = "recall.sqlFileFilter";
@@ -105,6 +106,23 @@ function readBindings(): StoredBinding[] {
 	return parsed.filter(isStoredBinding).slice(0, MAX_BINDINGS);
 }
 
+/** The directory holding `path`. Scan paths are `/`-separated, absolute. */
+function parentDir(path: string): string {
+	const index = path.lastIndexOf("/");
+	return index > 0 ? path.slice(0, index) : path;
+}
+
+/** Depth-first lookup of one node inside a folder scan, or null. */
+function findInTree(nodes: SqlFileNode[], target: string): SqlFileNode | null {
+	for (const node of nodes) {
+		if (node.path === target) return node;
+		if (!node.isDir) continue;
+		const hit = findInTree(node.children, target);
+		if (hit) return hit;
+	}
+	return null;
+}
+
 export const useSqlFilesStore = defineStore("sqlFiles", () => {
 	const folders = ref<string[]>(readFolders());
 	const filter = ref<string>(readFilter());
@@ -121,6 +139,15 @@ export const useSqlFilesStore = defineStore("sqlFiles", () => {
 	const versions = ref<Record<string, string>>({});
 	/** Expanded directory paths. In memory only — expansion is a view concern. */
 	const expanded = ref(new Set<string>());
+	/** The row being renamed inline, or null while no rename is in progress. */
+	const renamingPath = ref<string | null>(null);
+	/**
+	 * Rows cut or copied, and what a paste will do with them. Memory only —
+	 * the clipboard is a session gesture, not something to restore on boot.
+	 */
+	const clipboard = ref<{ paths: string[]; mode: "cut" | "copy" } | null>(
+		null,
+	);
 
 	// Restored newest-first, so the head is the most recently set binding and
 	// the cap evicts from the tail.
@@ -270,6 +297,313 @@ export const useSqlFilesStore = defineStore("sqlFiles", () => {
 		);
 	}
 
+	// ---- Mutating the tree -------------------------------------------------
+	//
+	// Every operation below is a round trip that ends in a rescan, because
+	// there is no filesystem watcher: the tree on screen is only ever as true
+	// as the last `refresh` call. A refusal comes back as data (`reason`), so
+	// it becomes a toast; a transport failure is caught here too, which means
+	// no file operation can ever reject into the UI.
+
+	/**
+	 * The open folder roots that can see `target`: a folder that IS the target
+	 * (a create at the top level) counts, and so does any tree holding it as a
+	 * node. Asked against the scans still in memory, which is why a delete can
+	 * still find the folder the row it just removed came from.
+	 */
+	function foldersContaining(target: string): string[] {
+		return folders.value.filter(
+			(folder) =>
+				folder === target ||
+				Boolean(findInTree(trees.value[folder] ?? [], target)),
+		);
+	}
+
+	/**
+	 * Rescans every folder that can see any of `targets`. Deduped because a
+	 * paste touches both ends and both usually sit in the same tree.
+	 */
+	async function refreshHolding(targets: string[]): Promise<void> {
+		const hits = new Set<string>();
+		for (const target of targets) {
+			for (const folder of foldersContaining(target)) hits.add(folder);
+		}
+		for (const folder of hits) await refresh(folder);
+	}
+
+	/** Paths of the open tabs bound to `path` or to anything under it. */
+	function tabPathsAt(path: string): string[] {
+		const prefix = `${path}/`;
+		const paths: string[] = [];
+		for (const tab of useTabsStore().tabs) {
+			const tabPath = tab.path;
+			if (tabPath === undefined) continue;
+			if (tabPath === path || tabPath.startsWith(prefix)) paths.push(tabPath);
+		}
+		return paths;
+	}
+
+	/**
+	 * Closes every tab bound to `path` or below it. A deleted file leaves
+	 * nothing to save into, so the tabs go rather than being held back for
+	 * unsaved SQL the user can no longer put anywhere.
+	 */
+	function closeTabsAt(path: string): void {
+		const tabs = useTabsStore();
+		for (const tabPath of tabPathsAt(path)) tabs.repath(tabPath, null);
+	}
+
+	/** Drops the expansion of `path` and everything under it. */
+	function collapseSubtree(path: string): void {
+		const prefix = `${path}/`;
+		for (const entry of [...expanded.value]) {
+			if (entry === path || entry.startsWith(prefix)) expanded.value.delete(entry);
+		}
+	}
+
+	/**
+	 * Carries the path-keyed state across a rename: a renamed file is the same
+	 * document, so its binding, its version token and its expansion belong to
+	 * the new path rather than to a name that no longer exists.
+	 */
+	function followRename(from: string, to: string): void {
+		if (from === to) return;
+		const binding = bindings.value[from];
+		if (binding) {
+			bindings.value[to] = binding;
+			delete bindings.value[from];
+			bindingOrder.value = bindingOrder.value.map((entry) =>
+				entry === from ? to : entry,
+			);
+			persistBindings();
+		}
+		const version = versions.value[from];
+		if (version !== undefined) {
+			versions.value[to] = version;
+			delete versions.value[from];
+		}
+		const prefix = `${from}/`;
+		for (const entry of [...expanded.value]) {
+			if (entry === from) {
+				expanded.value.delete(entry);
+				expanded.value.add(to);
+			} else if (entry.startsWith(prefix)) {
+				expanded.value.delete(entry);
+				expanded.value.add(`${to}/${entry.slice(prefix.length)}`);
+			}
+		}
+	}
+
+	/**
+	 * Creates an empty file or directory under `parent`. Refreshes the folders
+	 * that can see `parent` so the new row appears without reopening the panel.
+	 */
+	async function createEntry(
+		parent: string,
+		name: string,
+		isDir: boolean,
+	): Promise<void> {
+		try {
+			const result = await rpc.request.createSqlEntry(
+				{ parent, name, isDir },
+				{ maxRequestTime: RPC_TIMEOUTS.metadata },
+			);
+			if (!result.ok) {
+				toast(result.message);
+				return;
+			}
+			await refreshHolding([parent]);
+		} catch (err) {
+			toast(errorMessage(err));
+		}
+	}
+
+	/**
+	 * Renames one entry. A tab open on it follows the new path — the document
+	 * did not change, only where it lives — and the affected folders rescan.
+	 */
+	async function renameEntry(path: string, name: string): Promise<void> {
+		try {
+			const result = await rpc.request.renameSqlEntry(
+				{ path, name },
+				{ maxRequestTime: RPC_TIMEOUTS.metadata },
+			);
+			if (!result.ok) {
+				toast(result.message);
+				return;
+			}
+			followRename(path, result.path);
+			useTabsStore().repath(path, result.path);
+			await refreshHolding([path]);
+		} catch (err) {
+			toast(errorMessage(err));
+		}
+	}
+
+	/**
+	 * Deletes one entry, recursively for a directory. Tabs bound to it are
+	 * closed: the file they point at is gone, so there is no longer anywhere
+	 * for their SQL to be saved. Bindings are kept for the same reason
+	 * {@link removeFolder} keeps them — a rename back restores the mapping.
+	 */
+	async function deleteEntry(path: string): Promise<void> {
+		try {
+			const result = await rpc.request.deleteSqlEntry(
+				{ path },
+				{ maxRequestTime: RPC_TIMEOUTS.metadata },
+			);
+			if (!result.ok) {
+				toast(result.message);
+				return;
+			}
+			closeTabsAt(path);
+			collapseSubtree(path);
+			await refreshHolding([path]);
+		} catch (err) {
+			toast(errorMessage(err));
+		}
+	}
+
+	/** The scanned node for `path`, or null when no open tree holds it. */
+	function findNode(path: string): SqlFileNode | null {
+		for (const folder of folders.value) {
+			const hit = findInTree(trees.value[folder] ?? [], path);
+			if (hit) return hit;
+		}
+		return null;
+	}
+
+	/**
+	 * The entries sharing a directory with `path`, read off the scans already
+	 * in hand. A top-level row's directory is an opened folder rather than a
+	 * node, so it falls back to that folder's own root entries.
+	 */
+	function siblingsOf(path: string): SqlFileNode[] {
+		const parent = findNode(parentDir(path));
+		if (parent) return parent.children;
+		const folder = folders.value.find((root) => path.startsWith(`${root}/`));
+		return folder ? (trees.value[folder] ?? []) : [];
+	}
+
+	/**
+	 * A name no sibling holds: `q.sql` → `q copy.sql` → `q copy 2.sql`.
+	 * Siblings come from the scan already in hand, so the common case costs no
+	 * round trip; a name still taken on disk comes back as an `exists` failure.
+	 */
+	function duplicateName(node: SqlFileNode): string {
+		const dot = node.isDir ? -1 : node.name.lastIndexOf(".");
+		const stem = dot > 0 ? node.name.slice(0, dot) : node.name;
+		const ext = dot > 0 ? node.name.slice(dot) : "";
+		const siblings = new Set(
+			siblingsOf(node.path).map((child) => child.name),
+		);
+		let candidate = `${stem} copy${ext}`;
+		let counter = 2;
+		while (siblings.has(candidate)) {
+			candidate = `${stem} copy ${counter}${ext}`;
+			counter += 1;
+		}
+		return candidate;
+	}
+
+	/**
+	 * Copies a file next to itself, under a name no sibling holds.
+	 *
+	 * Not a transfer: a copy into the directory it already sits in targets the
+	 * name it already has, which the backend refuses. So the copy is made the
+	 * way this store makes files — create it, then write the source's text into
+	 * it. The version token is earned by reading the empty placeholder first,
+	 * because a write with no expectation means "create this file" and would
+	 * be refused against the one that now exists.
+	 *
+	 * Directories are not duplicated: only the filesystem's own recursive copy
+	 * can do that faithfully, and it is not exposed here.
+	 */
+	async function duplicateEntry(path: string): Promise<void> {
+		const node = findNode(path);
+		if (!node) {
+			toast("That entry is no longer in the tree");
+			return;
+		}
+		if (node.isDir) {
+			toast("Folders cannot be duplicated");
+			return;
+		}
+		try {
+			const { content } = await read(path);
+			const created = await rpc.request.createSqlEntry(
+				{ parent: parentDir(path), name: duplicateName(node), isDir: false },
+				{ maxRequestTime: RPC_TIMEOUTS.metadata },
+			);
+			if (!created.ok) {
+				toast(created.message);
+				return;
+			}
+			await read(created.path);
+			const written = await save(created.path, content);
+			if (!written.ok) {
+				toast(`Could not write the copy of ${node.name}`);
+				return;
+			}
+			await refreshHolding([path]);
+		} catch (err) {
+			toast(errorMessage(err));
+		}
+	}
+
+	function cut(paths: string[]): void {
+		clipboard.value = { paths: [...paths], mode: "cut" };
+	}
+
+	function copy(paths: string[]): void {
+		clipboard.value = { paths: [...paths], mode: "copy" };
+	}
+
+	function clearClipboard(): void {
+		clipboard.value = null;
+	}
+
+	/**
+	 * Pastes the clipboard into `destination`. A cut retargets: the document
+	 * did not change, only where it lives, so the tab open on a moved file
+	 * keeps its unsaved SQL, its datasource and its place in the strip and
+	 * follows the file to its new path. Following is unambiguous because the
+	 * batch result pairs every landed entry with the source it came from — the
+	 * refused rows are named separately in `failures`, so a partial paste
+	 * still retargets exactly the rows that moved.
+	 *
+	 * A copy leaves the originals, and with them their tabs, where they were;
+	 * only the new file is bound, and binding the copy is left to the user.
+	 *
+	 * The clipboard survives an all-or-nothing refusal so the user can paste
+	 * somewhere else; it is cleared only once something actually moved.
+	 */
+	async function paste(destination: string): Promise<void> {
+		const clip = clipboard.value;
+		if (!clip || clip.paths.length === 0) {
+			toast("Nothing to paste");
+			return;
+		}
+		try {
+			const result = await rpc.request.transferSqlEntries(
+				{ sources: clip.paths, destination, move: clip.mode === "cut" },
+				{ maxRequestTime: RPC_TIMEOUTS.metadata },
+			);
+			for (const failure of result.failures) toast(failure.message);
+			if (result.moved.length === 0) return;
+			if (clip.mode === "cut") {
+				for (const { from, to } of result.moved) {
+					followRename(from, to);
+					useTabsStore().repath(from, to);
+				}
+				clipboard.value = null;
+			}
+			await refreshHolding([destination, ...clip.paths]);
+		} catch (err) {
+			toast(errorMessage(err));
+		}
+	}
+
 	return {
 		folders,
 		filter,
@@ -277,14 +611,25 @@ export const useSqlFilesStore = defineStore("sqlFiles", () => {
 		bindings,
 		bindingOrder,
 		expanded,
+		renamingPath,
+		clipboard,
 		addFolder,
 		removeFolder,
 		refresh,
+		foldersContaining,
 		toggleExpanded,
 		bindingFor,
 		setBinding,
 		read,
 		save,
+		createEntry,
+		renameEntry,
+		deleteEntry,
+		duplicateEntry,
+		cut,
+		copy,
+		clearClipboard,
+		paste,
 		pickFolder,
 		revealInFolder,
 	};

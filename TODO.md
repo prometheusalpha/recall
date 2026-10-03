@@ -1,5 +1,4 @@
 Phase 1:
-
 - Khi mở app thì sẽ báo lỗi no open connection for id với connection của cái table đang mở
 - Chữ NULL mờ khi cell null
 - Nút new connection ở sidebar khi connection trống không bấm được, bấm k ra gì
@@ -20,11 +19,11 @@ Phase 3:
 - Global search
 
 Phase 4:
-- CRUD file trong sidebar quản lý file, bao gồm rename, cut copy paste, delete, save các thể loại
-- Run selection khi cmd enter
-- Autosave sql file
-- Bottom border cho màn sql, ngăn cách editor và result set 
-- Phần run against trong sql editor ấy, phần list connection và database chưa có height limit + scroll
+- [x] CRUD file trong sidebar quản lý file, bao gồm rename, cut copy paste, delete, save các thể loại
+- [x] Run selection khi cmd enter
+- [x] Autosave sql file
+- [x] Bottom border cho màn sql, ngăn cách editor và result set 
+- [x] Phần run against trong sql editor ấy, phần list connection và database chưa có height limit + scroll
 
 Phase 5:
 - Mnemonic có thể nhảy khi k mở file

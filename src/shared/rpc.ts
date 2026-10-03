@@ -18,6 +18,8 @@ import type { Bookmark } from "./bookmark";
 import type {
 	SqlFileContent,
 	SqlFileNode,
+	SqlFileOpBatchResult,
+	SqlFileOpResult,
 	SqlFileWriteResult,
 } from "./sqlFile";
 /**
@@ -194,6 +196,45 @@ export type BunRequests = {
 	writeSqlFile: {
 		params: { path: string; content: string; expectedVersion: string | null };
 		response: SqlFileWriteResult;
+	};
+
+	/**
+	 * Create an empty file or a directory under `parent`. Fails with
+	 * `exists` rather than overwriting, and the new name is validated by the
+	 * backend, so a separator or a `..` in it cannot escape the folder.
+	 */
+	createSqlEntry: {
+		params: { parent: string; name: string; isDir: boolean };
+		response: SqlFileOpResult;
+	};
+	/** Rename one entry in place. The tab open on it follows the new path. */
+	renameSqlEntry: {
+		params: { path: string; name: string };
+		response: SqlFileOpResult;
+	};
+	/**
+	 * Delete one entry, recursively for a directory. Missing is reported as
+	 * data so a tree refreshed behind the user's back does not look like an
+	 * error the user caused.
+	 */
+	deleteSqlEntry: {
+		params: { path: string };
+		response: SqlFileOpResult;
+	};
+	/**
+	 * Copy (`move: false`) or move (`move: true`) entries into `destination`.
+	 * A batch, because cut/copy can select several rows at once, and
+	 * per-entry, because one refused name must not lose the rest. Each `moved`
+	 * entry pairs its new path with the source it came from, so the caller can
+	 * repair state keyed on the old path even when only part of the batch landed.
+	 */
+	transferSqlEntries: {
+		params: {
+			sources: string[];
+			destination: string;
+			move: boolean;
+		};
+		response: SqlFileOpBatchResult;
 	};
 	/**
 	 * Every mnemonic bookmark, ordered by mnemonic. Rows whose file has been

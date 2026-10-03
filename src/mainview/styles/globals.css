@@ -174,6 +174,21 @@ body.panel-resizing * {
 	cursor: row-resize;
 }
 
+/* The editor/result divider. The splitter's own top border is one hairline
+   inside a 3px gap, which reads as almost nothing at the panel's rounded
+   edges; the rule below is drawn on the editor pane itself so the two halves
+   are always separated by a visible line, splitter drag state or not. */
+/* `:has(+ .splitpanes__pane)` rather than `:first-child`: the table-tab layout
+   is a single pane, and there is no result set under an editor to separate. */
+.splitpanes--horizontal > .splitpanes__pane:has(+ .splitpanes__pane) {
+	border-bottom: 1px solid var(--border);
+}
+
+/* The splitter's own border would double that line. */
+.splitpanes--horizontal > .splitpanes__splitter {
+	border-top: none !important;
+}
+
 .splitpanes__splitter::after {
 	content: "";
 	position: absolute;

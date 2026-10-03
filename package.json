@@ -10,7 +10,8 @@
 		"hmr": "hutch electrobun prepare && hutch pm exec -- vite --port 5173",
 		"build": "hutch electrobun prepare && hutch pm exec -- vite build && hutch electrobun build --env=stable",
 		"typecheck": "hutch pm exec -- vue-tsc --noEmit",
-		"format": "hutch pm exec -- oxfmt src"
+		"format": "hutch pm exec -- oxfmt src",
+		"build:mac": "hutch run build && rm -rf ~/Applications/recall.app && ditto build/stable-macos-arm64/recall.app ~/Applications/recall.app"
 	},
 	"dependencies": {
 		"@codemirror/autocomplete": "^6.20.0",

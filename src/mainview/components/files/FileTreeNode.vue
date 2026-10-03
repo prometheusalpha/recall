@@ -7,21 +7,23 @@ import {
 	FolderOpen,
 } from "lucide-vue-next";
 import type { Component } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import type { SqlFileNode } from "../../../shared/sqlFile";
 
 /**
  * One row of the SQL file tree, rendered recursively.
  *
- * Presentational only: the panel owns the folder list, the expansion set and
- * the datasource bindings, and this row reports clicks, twisty clicks and
- * right-clicks upward. Events bubble from children, so the panel has a single
- * handler per kind rather than one per level of the tree.
+ * Presentational only: the panel owns the folder list, the expansion set, the
+ * datasource bindings and the rename in progress, and this row reports clicks,
+ * twisty clicks, right-clicks and the committed name upward. Events bubble from
+ * children, so the panel has a single handler per kind rather than one per
+ * level of the tree.
  *
  * Height comes from the prewritten `.tree-row` (28px) and indentation is
  * 14px per depth level, matching `sidebar/TreeRow.vue` exactly — the two trees
  * sit side by side and must line up.
  */
-withDefaults(
+const props = withDefaults(
 	defineProps<{
 		node: SqlFileNode;
 		depth: number;
@@ -33,8 +35,13 @@ withDefaults(
 		 */
 		expandedPaths: ReadonlySet<string>;
 		activePath: string | null;
+		/**
+		 * The path of the one row being renamed inline, or null. The panel owns
+		 * it: a row asks to be renamed, it never decides that it is.
+		 */
+		renamingPath: string | null;
 	}>(),
-	{ expanded: false, activePath: null },
+	{ expanded: false, activePath: null, renamingPath: null },
 );
 
 const emit = defineEmits<{
@@ -42,7 +49,44 @@ const emit = defineEmits<{
 	activate: [node: SqlFileNode];
 	/** Right-click: the panel opens the context menu anchored to this path. */
 	menu: [node: SqlFileNode, event: MouseEvent];
+	/** The inline rename field was committed — Enter, or the field losing focus. */
+	"commit-rename": [path: string, name: string];
+	/** Escape: the row goes back to showing its name, untouched. */
+	"cancel-rename": [path: string];
 }>();
+
+/** True while the panel has this exact row in rename mode. */
+const renaming = computed(() => props.renamingPath === props.node.path);
+
+const renameField = ref<HTMLInputElement | null>(null);
+const draftName = ref("");
+
+/**
+ * Focus and select as the field appears, so typing replaces the name instead
+ * of appending to it. Watched on the mode, not on the name: the panel sets the
+ * path when the menu item is picked, and the row the user was on then swaps.
+ */
+watch(renaming, async (active) => {
+	if (!active) return;
+	draftName.value = props.node.name;
+	await nextTick();
+	renameField.value?.focus();
+	renameField.value?.select();
+});
+
+/**
+ * Enter commits and a lost focus commits, so a click anywhere else is a
+ * commit rather than a silently discarded edit. Escape is the way out.
+ */
+function commitRename(): void {
+	if (!renaming.value) return;
+	emit("commit-rename", props.node.path, draftName.value);
+}
+
+function cancelRename(): void {
+	if (!renaming.value) return;
+	emit("cancel-rename", props.node.path);
+}
 
 /** `.sql` files get the code glyph; anything else the plain document glyph. */
 function iconFor(node: SqlFileNode): Component {
@@ -85,7 +129,23 @@ function directoryIconFor(expanded: boolean): Component {
 				aria-hidden="true"
 			/>
 
-			<span class="min-w-0 flex-1 truncate">{{ node.name }}</span>
+			<!-- The field stands in for the label, at the row's own height and
+			     past the same twisty slot, so a rename does not shift the tree. -->
+			<input
+				v-if="renaming"
+				ref="renameField"
+				v-model="draftName"
+				type="text"
+				class="h-5 min-w-0 flex-1 rounded border border-ring bg-transparent px-1 text-[0.8125rem] outline-none"
+				:aria-label="`Rename ${node.name}`"
+				spellcheck="false"
+				autocomplete="off"
+				@click.stop
+				@keydown.enter.prevent.stop="commitRename"
+				@keydown.esc.prevent.stop="cancelRename"
+				@blur="commitRename"
+			/>
+			<span v-else class="min-w-0 flex-1 truncate">{{ node.name }}</span>
 		</div>
 
 		<!-- A directory with nothing under it was already dropped by the scan,
@@ -99,9 +159,12 @@ function directoryIconFor(expanded: boolean): Component {
 				:expanded="expandedPaths.has(child.path)"
 				:expanded-paths="expandedPaths"
 				:active-path="activePath"
+				:renaming-path="renamingPath"
 				@toggle="emit('toggle', $event)"
 				@activate="emit('activate', $event)"
 				@menu="(childNode, event) => emit('menu', childNode, event)"
+				@commit-rename="(path, name) => emit('commit-rename', path, name)"
+				@cancel-rename="(path) => emit('cancel-rename', path)"
 			/>
 		</div>
 	</div>

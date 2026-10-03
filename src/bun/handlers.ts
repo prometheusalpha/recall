@@ -25,7 +25,15 @@ import {
 	openConnection,
 	saveCredential,
 } from "./connectionPool";
-import { listSqlFiles, readSqlFile, writeSqlFile } from "./sqlFiles";
+import {
+	createSqlEntry,
+	deleteSqlEntry,
+	listSqlFiles,
+	readSqlFile,
+	renameSqlEntry,
+	transferSqlEntries,
+	writeSqlFile,
+} from "./sqlFiles";
 import {
 	listConnections as listStoredConnections,
 	saveConnections as saveStoredConnections,
@@ -523,6 +531,42 @@ export const handlers = {
 	 */
 	async writeSqlFile({ path, content, expectedVersion }: Params<"writeSqlFile">) {
 		return writeSqlFile(path, content, expectedVersion);
+	},
+
+	/**
+	 * Empty file or directory under `parent`. A refused name comes back as
+	 * `invalid` and an occupied one as `exists` — data for the field to show,
+	 * never an exception that would abort the whole panel.
+	 */
+	async createSqlEntry({ parent, name, isDir }: Params<"createSqlEntry">) {
+		return createSqlEntry(parent, name, isDir);
+	},
+
+	/** Renames in place and returns the new path, which the open tab follows. */
+	async renameSqlEntry({ path, name }: Params<"renameSqlEntry">) {
+		return renameSqlEntry(path, name);
+	},
+
+	/**
+	 * Recursive delete. A tree refreshed behind the user's back reports
+	 * `missing`, which the caller renders as nothing to delete rather than as
+	 * a failure they caused.
+	 */
+	async deleteSqlEntry({ path }: Params<"deleteSqlEntry">) {
+		return deleteSqlEntry(path);
+	},
+
+	/**
+	 * Copy or move of a multi-row selection. Per-entry by design: the ones
+	 * that landed are in `moved`, the ones that did not are in `failures`, and
+	 * both paths arrive in request order.
+	 */
+	async transferSqlEntries({
+		sources,
+		destination,
+		move,
+	}: Params<"transferSqlEntries">) {
+		return transferSqlEntries(sources, destination, move);
 	},
 
 } satisfies {
