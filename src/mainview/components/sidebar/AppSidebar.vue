@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import {
 	ChevronsUp,
+	Crosshair,
 	PanelLeftClose,
 	PanelLeftOpen,
 	Plus,
@@ -18,6 +19,8 @@ const RESTORED_WIDTH = 260;
 
 const emit = defineEmits<{
 	(e: "new-connection"): void;
+	/** Id of the connection profile the user chose to edit. */
+	(e: "edit-connection", connectionId: string): void;
 	/** New width in pixels, emitted on every change so the shell can react. */
 	(e: "resize", width: number): void;
 }>();
@@ -25,6 +28,7 @@ const emit = defineEmits<{
 /** The shape `ConnectionTree` exposes via `defineExpose`. */
 interface TreeHandle {
 	collapseAll: () => void;
+	locateActiveTab: () => void;
 }
 
 // Typed as `object` so any component instance fits; the exposed method is
@@ -47,6 +51,10 @@ watch(width, (value) => emit("resize", value));
 
 function collapseAll(): void {
 	(tree.value as TreeHandle | null)?.collapseAll();
+}
+
+function locateActiveTab(): void {
+	(tree.value as TreeHandle | null)?.locateActiveTab();
 }
 
 function collapse(): void {
@@ -96,6 +104,15 @@ function restore(): void {
 					size="icon"
 					variant="ghost"
 					class="h-6 w-6"
+					aria-label="Locate current tab"
+					@click="locateActiveTab"
+				>
+					<Crosshair aria-hidden="true" />
+				</Button>
+				<Button
+					size="icon"
+					variant="ghost"
+					class="h-6 w-6"
 					aria-label="Collapse all"
 					@click="collapseAll"
 				>
@@ -115,6 +132,7 @@ function restore(): void {
 				ref="tree"
 				class="min-h-0 flex-1"
 				@new-connection="emit('new-connection')"
+				@edit-connection="emit('edit-connection', $event)"
 			/>
 		</div>
 		<div

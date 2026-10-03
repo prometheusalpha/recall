@@ -35,6 +35,20 @@ const { toast } = useToast();
 void useConnectionsStore().hydrate();
 
 const connectionDialogOpen = ref(false);
+/** Profile being edited, or null when the dialog is creating a new one. */
+const connectionEditId = ref<string | null>(null);
+
+/** Opening for a new profile always clears the edit target first. */
+function openNewConnection(): void {
+	connectionEditId.value = null;
+	connectionDialogOpen.value = true;
+}
+
+function openEditConnection(connectionId: string): void {
+	connectionEditId.value = connectionId;
+	connectionDialogOpen.value = true;
+}
+
 const settingsOpen = ref(false);
 const snippetsOpen = ref(false);
 const quickOpen = useQuickOpen();
@@ -84,7 +98,7 @@ onBeforeUnmount(() => {
 		class="recall-window-frame flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground"
 	>
 		<AppToolbar
-			@new-connection="connectionDialogOpen = true"
+			@new-connection="openNewConnection"
 			@settings="settingsOpen = true"
 			@toggle-sidebar="sidebarHidden = !sidebarHidden"
 			@quick-open="quickOpen.open.value = !quickOpen.open.value"
@@ -94,6 +108,8 @@ onBeforeUnmount(() => {
 				v-show="!sidebarHidden"
 				class="shrink-0"
 				:style="{ width: `${sidebarWidth}px` }"
+				@new-connection="openNewConnection"
+				@edit-connection="openEditConnection"
 				@resize="sidebarWidth = $event"
 			/>
 			<QueryWorkspace class="min-w-0 flex-1" />
@@ -105,7 +121,7 @@ onBeforeUnmount(() => {
 				@resize="filesWidth = $event"
 			/>
 		</div>
-		<ConnectionDialog v-model:open="connectionDialogOpen" />
+		<ConnectionDialog v-model:open="connectionDialogOpen" :edit-id="connectionEditId" />
 		<SnippetsSettings v-model:open="snippetsOpen" />
 		<QuickOpenDialog />
 

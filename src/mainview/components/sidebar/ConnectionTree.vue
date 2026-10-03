@@ -3,10 +3,16 @@ import { computed, ref, watch } from "vue";
 import type { Component } from "vue";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
-import { Columns3, Database, Key, Link, Search, Server, Table2, Zap } from "lucide-vue-next";
+import { Columns3, Database, Key, Link, Pencil, Search, Server, Table2, Zap } from "lucide-vue-next";
 import TreeRow from "./TreeRow.vue";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
 import { flattenTree } from "../../composables/useFlatTree";
 import type { FlatTreeNode } from "../../composables/useFlatTree";
 import { errorMessage } from "../../lib/rpc";
@@ -126,15 +132,42 @@ interface TreeRowBinding {
 	loading: boolean;
 	iconClass: string;
 	childCount?: number;
-	badge?: LeafBadge;
-	title?: string;
 	connected: boolean;
 	connectedTitle?: string;
+	/** Small pill after the label, e.g. a column's nullability. */
+	badge?: { text: string; tone: "warning" | "muted" };
+	/** Row tooltip, for details that do not fit in the label. */
+	title?: string;
+	contextable: boolean;
 	onToggle: () => void;
 	onActivate: () => void;
+	/**
+	 * Must be spelled exactly `onContextmenu`: Vue resolves an emit listener as
+	 * `toHandlerKey(event)`, so a capital M misses and falls through to attrs,
+	 * landing as a raw DOM listener that never fires.
+	 */
+	onContextmenu: (event: MouseEvent) => void;
 }
 
-const emit = defineEmits<{ (e: "new-connection"): void }>();
+const emit = defineEmits<{
+	(e: "new-connection"): void;
+	/** Id of the connection profile the user asked to edit. */
+	(e: "edit-connection", connectionId: string): void;
+}>();
+
+/** The connection whose context menu is open; null while the menu is closed. */
+const menuConnectionId = ref<string | null>(null);
+const menuOpen = ref(false);
+/**
+ * Virtual anchor for the context menu. `DropdownMenu` positions its content
+ * against the trigger element, so a zero-size element parked at the pointer is
+ * what puts the menu under the cursor rather than under the whole tree. The
+ * menu is opened by the right-click handler, never by clicking this.
+ */
+const menuAnchor = ref({ x: 0, y: 0 });
+
+/** The virtual scroller, for scrolling a row the user cannot currently see. */
+const scroller = ref<{ scrollToItem: (index: number) => void } | null>(null);
 
 const connections = useConnectionsStore();
 const tabs = useTabsStore();
@@ -645,16 +678,95 @@ function rowBinding(slot: unknown): TreeRowBinding {
 		// connection node, so a lookup on any other kind is guarded above.
 		connectedTitle:
 			node.kind === "connection" ? connections.status[node.id] : undefined,
+		// Only a connection owns an action of its own, so only it answers a
+		// right-click; every other row keeps the browser's native menu.
+		contextable: node.kind === "connection",
 		onToggle: () => toggle(node),
 		onActivate: () => activate(node),
+		onContextmenu: (event: MouseEvent) => onRowContextMenu(node, event),
 	};
+}
+
+function onRowContextMenu(node: TreeNode, event: MouseEvent): void {
+	if (node.kind !== "connection") return;
+	menuConnectionId.value = node.id;
+	menuAnchor.value = { x: event.clientX, y: event.clientY };
+	menuOpen.value = true;
+}
+
+function editConnection(): void {
+	if (!menuConnectionId.value) return;
+	emit("edit-connection", menuConnectionId.value);
+}
+
+/**
+ * Reveals whatever the active tab points at: opens its ancestors, selects the
+ * row and scrolls it into view, so the sidebar says where the work in the
+ * workspace came from.
+ *
+ * Each ancestor is loaded as it is opened, because `flattenTree` only emits a
+ * child whose key is in `expanded` *and* whose parent has cached children — so
+ * this costs exactly the queries clicking down to the row by hand would. The
+ * target is resolved after each load, which is also why a tab whose connection
+ * was deleted (or whose container has gone) simply does nothing.
+ */
+async function locateActiveTab(): Promise<void> {
+	const tab = tabs.activeTab;
+	if (!tab) return;
+
+	const connection = roots.value.find(
+		(node): node is Extract<TreeNode, { kind: "connection" }> =>
+			node.kind === "connection" && node.id === tab.connectionId,
+	);
+	if (!connection) return;
+
+	setExpanded(connection.key, true);
+	await loadChildren(connection);
+
+	// The container row's own `database`/`schema` fields are what identify it:
+	// its key names the level it lists (the database on MySQL, the default
+	// schema elsewhere), which the tab does not necessarily carry.
+	const container = (childrenOf(connection) ?? []).find(
+		(node): node is Extract<TreeNode, { kind: "schema" }> =>
+			node.kind === "schema" &&
+			node.database === tab.database &&
+			node.schema === tab.schema,
+	);
+	if (!container) return;
+
+	setExpanded(container.key, true);
+	await loadChildren(container);
+
+	// A query tab names no table, so the deepest row it can resolve to is its
+	// container; a table the active filter is hiding falls back to it as well,
+	// rather than selecting nothing.
+	let target: TreeNode = container;
+	if (tab.mode === "table" && tab.table) {
+		const tableKey = tableKeyOf(tab.connectionId, tab.database, tab.schema, tab.table);
+		const table = (childrenOf(container) ?? []).find(
+			(node): node is Extract<TreeNode, { kind: "table" }> =>
+				node.kind === "table" && node.key === tableKey,
+		);
+		if (table) {
+			target = table;
+			setExpanded(table.key, true);
+			await loadChildren(table);
+		}
+	}
+
+	selectedKey.value = target.key;
+
+	// The index has to be read from the flattened list, since that — not the raw
+	// tree — is what the scroller holds.
+	const index = rows.value.findIndex((row) => row.node.key === target.key);
+	if (index >= 0) scroller.value?.scrollToItem(index);
 }
 
 function collapseAll(): void {
 	expanded.value.clear();
 }
 
-defineExpose({ collapseAll });
+defineExpose({ collapseAll, locateActiveTab });
 </script>
 
 <template>
@@ -693,6 +805,7 @@ defineExpose({ collapseAll });
 
 		<RecycleScroller
 			v-else
+			ref="scroller"
 			class="recall-scroll min-h-0 flex-1"
 			:items="rows"
 			:item-size="ROW_HEIGHT"
@@ -705,5 +818,31 @@ defineExpose({ collapseAll });
 				<TreeRow v-bind="rowBinding(slot)" />
 			</template>
 		</RecycleScroller>
+
+		<!-- One menu for every row. Rows are virtualised, so a per-row menu
+		     would remount with every scroll; this one is parked next to the
+		     scroller and anchored at the pointer instead. -->
+		<DropdownMenu v-model:open="menuOpen">
+			<!-- `as-child` hands the anchor element straight to the popper, so
+			     the trigger IS the zero-size element. It is `fixed` because the
+			     pointer coordinates are viewport-relative while the sidebar sits
+			     offset inside the gutter. -->
+			<DropdownMenuTrigger as-child>
+				<span
+					class="pointer-events-none fixed size-0"
+					:style="{
+						left: `${menuAnchor.x}px`,
+						top: `${menuAnchor.y}px`,
+					}"
+					aria-hidden="true"
+				/>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent class="w-48" aria-label="Connection actions">
+				<DropdownMenuItem :disabled="!menuConnectionId" @select="editConnection">
+					<Pencil aria-hidden="true" />
+					Edit connection
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
 	</div>
 </template>

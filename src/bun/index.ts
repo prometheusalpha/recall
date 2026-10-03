@@ -1,6 +1,7 @@
 import { BrowserWindow, Updater } from "electrobun/main";
 import { rpc } from "./rpc";
 import { closeAllConnections } from "./connectionPool";
+import { setupApplicationMenu } from "./menu";
 
 export { rpc } from "./rpc";
 export { handlers } from "./rpc";
@@ -24,6 +25,10 @@ async function getMainViewUrl(): Promise<string> {
 	}
 	return "views://mainview/index.html";
 }
+
+// Declared before the window so the responder chain that makes ⌘X/⌘C/⌘V/⌘A
+// reach the webview is in place by the time anything can take focus.
+setupApplicationMenu();
 
 // Create the main application window
 const url = await getMainViewUrl();

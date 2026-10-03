@@ -374,8 +374,20 @@ export const useConnectionsStore = defineStore("connections", () => {
 		);
 	}
 
+	/**
+	 * Brings a profile up before anyone asks the backend to use it.
+	 *
+	 * A table tab restored from disk runs its first `listColumns` while the
+	 * startup profile read is still in flight, and `connect` resolves the
+	 * profile out of `configs` — which is empty until that read lands. So the
+	 * profile list is awaited here first. `hydrate` owns its own promise, so
+	 * joining it late starts the same single read rather than a second one,
+	 * and it resolves rather than rejects, leaving the connect error — the one
+	 * callers surface — as the only failure this can report.
+	 */
 	async function ensureConnected(id: string): Promise<void> {
 		if (status.value[id] === "connected") return;
+		await (hydration ?? hydrate());
 		await connect(id);
 	}
 

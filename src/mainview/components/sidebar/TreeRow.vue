@@ -9,7 +9,7 @@ import type { Component } from "vue";
  * Height comes from the prewritten `.tree-row` (28px) so it matches
  * `RecycleScroller`'s `item-size`; indentation is 16px per depth level.
  */
-withDefaults(
+const props = withDefaults(
 	defineProps<{
 		label: string;
 		depth: number;
@@ -29,11 +29,30 @@ withDefaults(
 		badge?: { text: string; tone: "warning" | "muted" };
 		/** Row tooltip, for details that do not fit in the label. */
 		title?: string;
+		/**
+		 * Whether a right-click on this row is ours to handle. Off by default so
+		 * only the row kinds that actually have a menu suppress the browser's.
+		 */
+		contextable?: boolean;
 	}>(),
-	{ selected: false, loading: false },
+	{ selected: false, loading: false, contextable: false },
 );
 
-const emit = defineEmits<{ toggle: []; activate: [] }>();
+const emit = defineEmits<{
+	toggle: [];
+	activate: [];
+	contextmenu: [event: MouseEvent];
+}>();
+
+function onContextMenu(event: MouseEvent): void {
+	if (!props.contextable) return;
+	// Both guards are scoped to rows we serve a menu for: the click must not
+	// also activate the row, and the browser's own menu must stay out of the way.
+	event.preventDefault();
+	event.stopPropagation();
+	emit("contextmenu", event);
+}
+
 </script>
 
 <template>
@@ -48,6 +67,7 @@ const emit = defineEmits<{ toggle: []; activate: [] }>();
 		:style="{ paddingLeft: `calc(0.5rem + ${depth} * 16px)` }"
 		:title="title"
 		@click="emit('activate')"
+		@contextmenu="onContextMenu"
 		@keydown.enter.prevent="emit('activate')"
 		@keydown.space.prevent="emit('activate')"
 	>

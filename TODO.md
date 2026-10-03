@@ -1,7 +1,18 @@
-1. Đổi app name sang recall và app icon sang lucide database-zap
-2. Phần new connection, các input bị lỗi không thể dùng cmd a để select all, với cả bỏ cái auto suggest chính tả đi. Phần TLS thu gọn thành drop down. Các input cũng đang lỗi không thể dùng cmd V để paste ?????????
-3. Khi để trống database mysql thì báo lỗi Access denied for user 'vibeApply'@'%' to database 'mysql'
-4. Phần context menu của tab có thêm nút close others
-5. WHERE và ORDER BY không dùng debounce nữa mà nhấn enter mới chạy query
-6. Bỏ background xanh lá ở tab đi, tab trở thành hình chữ nhật sát nhau chứ k phải pill lơ lửng
-7. Mỗi table ở sidebar phải có 1 dropdown với các thứ như là Columns, Indexes, Triggers, Foreign Keys, mỗi cái là 1 drop down nữa kiểu như này 🖼 #1
+Phase 1:
+
+- Khi mở app thì sẽ báo lỗi no open connection for id với connection của cái table đang mở
+- Chữ NULL mờ khi cell null
+- Nút new connection ở sidebar khi connection trống không bấm được, bấm k ra gì
+- nút dấu + ở sidebar connection cũng k bấm được 
+- Thêm nút định vị current tab trong sidebar (focus active ấy)
+- Thiếu menu edit connection
+
+Phase 2:
+- Nút new tab (dấu +) đang không căn giữa với các tab
+- Khi bật dropdown của table ở sidebar thì không load vội cái gì mà chỉ khi mở drop down bên trong thì mới load cái bên trong
+  - Phần foreign key và trigger load rất lâu
+- Không tự sort khi bấm tên cột mà đưa vào context menu
+
+Phase 3:
+- Kéo thả vị trí cột
+- Gợi ý cột ở where và order by

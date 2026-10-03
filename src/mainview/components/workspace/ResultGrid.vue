@@ -574,6 +574,12 @@ function formatValue(value: unknown): string {
 	}
 }
 
+/** Body text: a NULL cell shows a dim `NULL` marker instead of reading as blank. Editing and copy keep using the raw `formatValue`. */
+function cellDisplayValue(value: unknown): string {
+	if (isNullValue(value)) return "NULL";
+	return formatValue(value);
+}
+
 /** Full value for hover; CSS truncation hides the tail, `title` keeps it. */
 function cellTitle(value: unknown): string | undefined {
 	if (isNullValue(value)) return "NULL";
@@ -770,7 +776,9 @@ function rowKey(_row: unknown, index: number): number {
 											@blur="commitEdit()"
 										>
 										<span v-else class="truncate">{{
-											formatValue(cellAt(item, columnIndexes[columnIndex] ?? 0))
+											cellDisplayValue(
+												cellAt(item, columnIndexes[columnIndex] ?? 0),
+											)
 										}}</span>
 									</div>
 								</div>

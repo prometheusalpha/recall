@@ -252,6 +252,10 @@ async function ensureKeyColumns(tab: Tab): Promise<string[]> {
 	if (keyColumnsLoading.value[tab.id]) return [];
 	keyColumnsLoading.value[tab.id] = true;
 	try {
+		// The backend has no open socket until `connect` has finished, so this
+		// has to be serialised behind it — otherwise a tab restored from disk
+		// reads columns before the connection it names exists.
+		await connectionsStore.ensureConnected(tab.connectionId);
 		const columns = await rpc.request.listColumns({
 			connectionId: tab.connectionId,
 			database: tab.database,
