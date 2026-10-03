@@ -1,0 +1,658 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap');
+
+@import "./tokens.css";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@layer base {
+	* {
+		border-color: var(--border);
+		outline-color: color-mix(in srgb, var(--ring) 50%, transparent);
+	}
+
+	html,
+	body,
+	#app {
+		height: 100%;
+	}
+
+	body {
+		margin: 0;
+		font-family: var(--font-sans);
+		background: var(--background);
+		color: var(--foreground);
+		font-synthesis: none;
+		text-rendering: geometricPrecision;
+		overflow: hidden;
+		-webkit-font-smoothing: antialiased;
+	}
+
+	::selection {
+		background: color-mix(in srgb, var(--primary) 24%, transparent);
+	}
+
+	input,
+	textarea,
+	button {
+		font: inherit;
+		color: inherit;
+	}
+}
+
+/* ---------------------------------------------------------------------------
+ * Window frame
+ * A 1px hairline across the very top reads as native chrome on macOS and hides
+ * the seam between the frameless titlebar and the OS surface.
+ * ------------------------------------------------------------------------ */
+.recall-window-frame {
+		position: relative;
+	}
+
+.recall-window-frame::before {
+		content: "";
+		position: absolute;
+		inset: 0 0 auto 0;
+		height: 1px;
+		background: var(--window-top-border);
+		pointer-events: none;
+		z-index: 80;
+}
+
+/* ---------------------------------------------------------------------------
+ * Shell chrome
+ * The panel-gutter look is the app's identity: a 4px gutter with each panel
+ * carrying its own 1px border and 4px radius.
+ * ------------------------------------------------------------------------ */
+.panel-gutter {
+	background: var(--gutter);
+}
+
+.panel {
+	position: relative;
+	border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+	border-radius: var(--radius-md);
+	background: var(--background);
+	overflow: hidden;
+}
+
+.app-toolbar {
+	height: 2.5rem;
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	padding: 0 0.5rem;
+	flex-shrink: 0;
+	background: color-mix(in srgb, var(--muted) 30%, transparent);
+	border-bottom: 1px solid var(--border);
+	overflow: hidden;
+}
+
+.sidebar-header {
+	height: 2.25rem;
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	padding: 0 0.75rem;
+	flex-shrink: 0;
+	font-size: 0.6875rem;
+	font-weight: 500;
+	color: var(--muted-foreground);
+	background: var(--sidebar-header);
+	border-bottom: 1px solid var(--border);
+}
+
+/* ---------------------------------------------------------------------------
+ * Panel resize handle
+ * A 5px hit target with a 3px visible grip that only appears on hover.
+ * ------------------------------------------------------------------------ */
+.panel-resize-handle {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 5px;
+	cursor: col-resize;
+	z-index: 10;
+	touch-action: none;
+}
+
+.panel-resize-handle--right {
+	right: -3px;
+}
+
+.panel-resize-handle--left {
+	left: -3px;
+}
+
+.panel-resize-handle::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 3px;
+	height: 24px;
+	transform: translate(-50%, -50%);
+	border-radius: 2px;
+	background: transparent;
+	transition: background-color 120ms ease;
+}
+
+.panel-resize-handle:hover::after {
+	background: var(--ring);
+}
+
+/* Suppress text selection and pointer events on panels while a drag is live. */
+body.panel-resizing {
+	user-select: none;
+	cursor: col-resize;
+}
+
+body.panel-resizing * {
+	cursor: col-resize !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * Splitpanes splitters — restyled to a 3px hairline, matching dbx.
+ * ------------------------------------------------------------------------ */
+.splitpanes--vertical > .splitpanes__pane {
+	border-radius: 0;
+}
+
+.splitpanes__splitter {
+	background: transparent !important;
+	border: none !important;
+	border-right: 1px solid var(--border) !important;
+	position: relative;
+	width: 3px !important;
+}
+
+.splitpanes--horizontal > .splitpanes__splitter {
+	border-right: none !important;
+	border-top: 1px solid var(--border) !important;
+	height: 3px !important;
+	cursor: row-resize;
+}
+
+.splitpanes__splitter::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	transition: background-color 120ms ease;
+}
+
+.splitpanes__splitter:hover::after {
+	background: color-mix(in srgb, var(--ring) 40%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+ * Tabs
+ * Tabs are flush rectangles, not floating pills: square corners, no outline and
+ * no gap, so the strip reads as one continuous band whose only emphasis is the
+ * active tab's fill and its bottom rule.
+ * ------------------------------------------------------------------------ */
+.tab-strip {
+	display: flex;
+	height: 2.25rem;
+	align-items: stretch;
+	gap: 0;
+	overflow-x: auto;
+	overflow-y: hidden;
+	scrollbar-width: none;
+	flex-shrink: 0;
+}
+
+.tab-strip::-webkit-scrollbar {
+	display: none;
+}
+
+.tab-pill {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	height: 100%;
+	padding: 0 0.5rem;
+	flex-shrink: 0;
+	font-size: 0.75rem;
+	color: var(--muted-foreground);
+	background: transparent;
+	border-radius: 0;
+	cursor: default;
+	user-select: none;
+	transition:
+		background-color 100ms ease,
+		color 100ms ease;
+}
+
+/** Hover only lifts the surface — the pointer is transient, so it must not
+    compete with the selection for the user's attention. */
+.tab-pill:hover {
+	background: var(--accent);
+	color: var(--foreground);
+}
+
+/** The open tab is marked with no colour at all: a fill one step stronger than
+    hover, the full-strength foreground, and a bottom rule under the tab. Mixing
+    the accent toward the foreground keeps that step consistent in both themes —
+    it darkens the light surface and lightens the dark one — where a hardcoded
+    tint would have to be re-invented per theme. */
+.tab-pill[data-active="true"] {
+	background: color-mix(in srgb, var(--accent) 88%, var(--foreground));
+	color: var(--foreground);
+	border-bottom: 1px solid var(--ring);
+}
+
+.tab-pill[data-dragging="true"] {
+	opacity: 0.4;
+}
+
+.tab-pill[data-drop-before="true"]::before,
+.tab-pill[data-drop-after="true"]::after {
+	content: "";
+	position: absolute;
+	top: 15%;
+	bottom: 15%;
+	width: 2px;
+	border-radius: 1px;
+	background: var(--ring);
+}
+
+/** With the tabs flush there is no gap to sit in, so the indicator is inset into
+    the tab's own edge: it stays inside the box and is never clipped by the
+    strip's overflow, including at the first and last tab. */
+.tab-pill[data-drop-before="true"]::before {
+	left: 0;
+}
+
+.tab-pill[data-drop-after="true"]::after {
+	right: 0;
+}
+
+.tab-close {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1rem;
+	height: 1rem;
+	border-radius: 2px;
+	color: inherit;
+	opacity: 0;
+	transition: opacity 100ms ease;
+}
+
+.tab-pill:hover .tab-close,
+.tab-pill[data-active="true"] .tab-close {
+	opacity: 0.6;
+}
+
+.tab-close:hover {
+	opacity: 1;
+	background: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------
+ * Data grid
+ * ------------------------------------------------------------------------ */
+/**
+ * Grid cells and column headers use the monospace face. It is not decoration:
+ * mixed-width digits make a right-aligned number column ragged, and
+ * monospaced cells make a truncated value's width predictable.
+ */
+.data-grid-font {
+	font-family: var(--font-mono);
+	font-feature-settings: "tnum";
+	font-variant-numeric: tabular-nums;
+	font-size: 12px;
+}
+
+/* Header and body cells carry the same face as `.data-grid-font`; they are
+   separate classes so a caller can style the grid without the wrapper.
+   The resize handle's own rules live further down, next to the rest of the
+   grid section; splicing them in after this selector list silently absorbed
+   these two selectors into the handle's rule and collapsed the grid. */
+.grid-header-cell,
+.grid-cell {
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The size has to be stated here: cells inherit from the shell otherwise, and
+   a 26px row carrying 14px text looks crowded and clips descenders. */
+.grid-cell {
+	font-size: 12px;
+	line-height: 1.15;
+}
+
+.grid-row-number {
+	color: var(--muted-foreground);
+	background: var(--chrome);
+	justify-content: flex-end;
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+	flex-shrink: 0;
+	/* The gutter is reference, not content, so it sits a step below the values. */
+	font-size: 11px;
+	line-height: 1.15;
+}
+
+/**
+ * Selection paint. Three states, matching DataGrip: a filled range, a single
+ * selected cell, and the active cell inside it. The active cell keeps a
+ * primary-coloured border even when the range is one cell wide, so the caret
+ * and the selection never become indistinguishable.
+ */
+.grid-cell[data-selected="true"],
+.grid-header-cell[data-selected="true"],
+.grid-row-number[data-selected="true"] {
+	background-color: var(--data-grid-cell-selected-bg);
+}
+
+.grid-cell[data-active="true"],
+.grid-cell[data-selected="true"][data-active="true"] {
+	box-shadow: inset 0 0 0 1.5px var(--primary);
+}
+
+.grid-cell[data-selected="true"] + .grid-cell[data-selected="true"] {
+	border-left-color: transparent;
+}
+
+/* The editor sits exactly where the value was, so the row never reflows. */
+.grid-cell-editor {
+	width: 100%;
+	height: 100%;
+	border: none;
+	outline: none;
+	padding: 0 0.5rem;
+	background-color: var(--background);
+	color: var(--foreground);
+	font: inherit;
+}
+
+.grid-body:focus-visible {
+	outline: 1px solid var(--border);
+	outline-offset: -1px;
+}
+
+/* DBX keeps the filter controls and the action buttons on one 32px band. */
+.result-filterbar {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	height: 2rem;
+	flex-shrink: 0;
+	padding: 0 0.25rem;
+	border-bottom: 1px solid var(--border);
+	background-color: var(--chrome);
+}
+
+.result-filterbar-label {
+	font-size: 0.75rem;
+	font-weight: 500;
+	flex-shrink: 0;
+}
+
+/* The context row names what the active data tab is looking at, so the user
+   does not have to read the SQL to know which table they are editing. */
+.result-context-row {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	height: 2.25rem;
+	flex-shrink: 0;
+	padding: 0 0.75rem;
+	border-bottom: 1px solid var(--border);
+overflow: hidden;
+}
+
+.result-context-pill {
+	display: inline-flex;
+	align-items: center;
+	min-width: 3rem;
+	padding: 0.125rem 0.5rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background-color: color-mix(in srgb, var(--muted) 30%, transparent);
+	font-size: 0.75rem;
+	line-height: 1rem;
+	color: var(--muted-foreground);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* The table is the subject of the tab, so it gets the stronger fill. */
+.result-context-pill--primary {
+	background-color: color-mix(in srgb, var(--muted) 50%, transparent);
+	font-weight: 500;
+}
+
+/* Three zones: what came back and how long it took, the statement that
+   produced it, then the control that acts on it. */
+.result-statusbar {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr) max-content;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.25rem 0.75rem;
+	flex-shrink: 0;
+	border-top: 1px solid var(--border);
+	background-color: var(--chrome-muted);
+	font-size: 0.75rem;
+	color: var(--muted-foreground);
+}
+
+/* Centred in the flexible middle column and dimmed, so the statement reads as
+   context rather than as the bar's primary content. */
+.result-statusbar-sql {
+	justify-self: center;
+	min-width: 0;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	opacity: 0.6;
+	cursor: pointer;
+	transition: opacity 120ms ease;
+}
+
+.result-statusbar-sql:hover {
+	opacity: 1;
+}
+
+
+.grid-header-cell {
+	display: flex;
+	align-items: center;
+	height: 28px;
+	padding: 0 0.5rem;
+	flex-shrink: 0;
+	background: var(--grid-header);
+	border-right: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+	font-size: 0.75rem;
+	font-weight: 500;
+	color: var(--muted-foreground);
+	white-space: nowrap;
+	overflow: hidden;
+	position: relative;
+	user-select: none;
+}
+
+.grid-cell {
+	display: flex;
+	align-items: center;
+	height: 26px;
+	padding: 0 0.5rem;
+	flex-shrink: 0;
+	border-right: 1px solid
+		color-mix(in srgb, var(--border) 60%, transparent);
+	border-bottom: 1px solid
+		color-mix(in srgb, var(--border) 60%, transparent);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.grid-cell[data-null="true"] {
+	color: var(--muted-foreground);
+	font-style: italic;
+}
+
+/* Hover must not repaint a selected cell: both rules carry the same
+   specificity, so without the :not() the later one wins and the selection
+   disappears the moment the pointer crosses the range. */
+.grid-row:hover .grid-cell:not([data-selected="true"]) {
+	background: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* The resize handle occupies the last few pixels of a header cell, so it reads
+   as part of the column edge rather than as a control sitting inside it. */
+.grid-column-resize {
+	position: absolute;
+	top: 0;
+	right: -3px;
+	width: 7px;
+	height: 100%;
+	cursor: col-resize;
+	touch-action: none;
+	z-index: 2;
+}
+
+.grid-column-resize::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 1px;
+	height: 14px;
+	transform: translate(-50%, -50%);
+	background-color: transparent;
+	transition: background-color 120ms ease;
+}
+
+.grid-column-resize:hover::after {
+	background-color: var(--muted-foreground);
+}
+
+/* ---------------------------------------------------------------------------
+ * Sidebar tree
+ * ------------------------------------------------------------------------ */
+.tree-row {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	height: 1.75rem;
+	padding: 0 0.5rem;
+	font-size: 0.8125rem;
+	cursor: default;
+	user-select: none;
+	white-space: nowrap;
+}
+
+.tree-row:hover {
+	background: var(--accent);
+}
+
+.tree-row[data-selected="true"] {
+	background: var(--accent);
+	color: var(--accent-foreground);
+}
+
+.tree-row[data-loading="true"] {
+	opacity: 0.5;
+}
+
+.tree-twisty {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1rem;
+	height: 1rem;
+	flex-shrink: 0;
+	color: var(--muted-foreground);
+	transition: transform 100ms ease;
+}
+
+.tree-twisty[data-expanded="true"] {
+	transform: rotate(90deg);
+}
+
+/* ---------------------------------------------------------------------------
+ * Scrollbars — thin, overlay-style, matching the reference app.
+ * ------------------------------------------------------------------------ */
+.recall-scroll {
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+
+.recall-scroll::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+
+.recall-scroll::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.recall-scroll::-webkit-scrollbar-thumb {
+	background-color: var(--border);
+	border: 3px solid transparent;
+	background-clip: content-box;
+	border-radius: 6px;
+}
+
+.recall-scroll::-webkit-scrollbar-thumb:hover {
+	background-color: var(--ring);
+}
+
+/* ---------------------------------------------------------------------------
+ * CodeMirror — themed to the token palette rather than the library default.
+ * ------------------------------------------------------------------------ */
+.cm-editor {
+	height: 100%;
+	background: var(--background);
+	color: var(--foreground);
+	font-family: var(--font-mono);
+	font-size: 13px;
+}
+
+.cm-editor.cm-focused {
+	outline: none;
+}
+
+.cm-scroller {
+	font-family: var(--font-mono) !important;
+	font-size: 13px !important;
+	line-height: 1.5;
+}
+
+.cm-gutters {
+	background: var(--background) !important;
+	color: var(--muted-foreground) !important;
+	border-right: 1px solid var(--border);
+}
+
+.cm-activeLine,
+.cm-activeLineGutter {
+	background: color-mix(in srgb, var(--accent) 40%, transparent) !important;
+}
+
+.cm-selectionBackground,
+.cm-editor .cm-selectionBackground,
+.cm-content ::selection {
+	background: color-mix(in srgb, var(--primary) 20%, transparent) !important;
+}
+
+@theme inline {
+	--font-heading: var(--font-sans);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+	}
+  body {
+    @apply bg-background text-foreground;
+	}
+}

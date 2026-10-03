@@ -1,0 +1,136 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Recall design tokens, copied 1:1 from the reference app's palette.
+ * Radius is deliberately a 4/6px system — it is the dominant visual signature.
+ */
+@theme inline {
+	/* UI text uses the host system face — nothing is bundled, so naming a font
+	   we do not ship would shift the whole shell between machines. */
+	--font-sans:
+		-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue",
+		"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+	/* Grid cells and the SQL editor share one monospace face so numeric
+	   columns line up. The Nerd Font variant is listed first because it also
+	   carries the private-use glyphs the sidebar tree icons use. */
+	--font-mono:
+		"JetBrains Mono Nerd Font", "JetBrainsMono Nerd Font", "JetBrains Mono",
+		ui-monospace, SFMono-Regular, Menlo, monospace;
+
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-error-bg: color-mix(in srgb, var(--destructive) 10%, transparent);
+	--color-success: var(--success);
+	--color-success-bg: var(--success-bg);
+	--color-warning: var(--warning);
+	--color-warning-bg: var(--warning-bg);
+	--color-info: var(--info);
+	--color-info-bg: var(--info-bg);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--color-hover: var(--accent);
+	--color-chrome: var(--chrome);
+	--color-chrome-muted: var(--chrome-muted);
+	--color-grid-header: var(--grid-header);
+	--color-gutter: var(--gutter);
+	--color-sidebar-header: var(--sidebar-header);
+	--color-background-solid: var(--background);
+
+	--radius-sm: 4px;
+	--radius-md: 4px;
+	--radius-lg: 6px;
+	--radius-xl: 6px;
+}
+
+:root {
+	--background: rgb(255 255 255);
+	--foreground: rgb(10 10 10);
+	--card: rgb(255 255 255);
+	--card-foreground: rgb(10 10 10);
+	--popover: rgb(255 255 255);
+	--popover-foreground: rgb(10 10 10);
+	--primary: rgb(23 23 23);
+	--primary-foreground: rgb(250 250 250);
+	--secondary: rgb(245 245 245);
+	--secondary-foreground: rgb(23 23 23);
+	--muted: rgb(245 245 245);
+	--muted-foreground: rgb(115 115 115);
+	--accent: rgb(245 245 245);
+	--accent-foreground: rgb(23 23 23);
+	--destructive: rgb(231 0 11);
+	--border: rgb(229 229 229);
+	--input: rgb(229 229 229);
+	--ring: rgb(161 161 161);
+
+	--success: rgb(22 163 74);
+	--success-bg: color-mix(in srgb, var(--success) 12%, transparent);
+	--warning: rgb(217 119 6);
+	--warning-bg: color-mix(in srgb, var(--warning) 14%, transparent);
+	--info: rgb(37 99 235);
+	--info-bg: color-mix(in srgb, var(--info) 12%, transparent);
+
+	--chrome: rgb(245 245 245);
+	/* Grid selection: a tinted fill for the range; the active cell is outlined
+	   with --primary so a one-cell selection still shows where the caret is. */
+	--data-grid-cell-selected-bg: rgb(191 219 254);
+	--chrome-muted: rgb(240 240 240);
+	/* The grid header sits a shade above the grid body so the column names stay
+	   readable while rows scroll under them. */
+	--grid-header: rgb(240 240 240);
+	--gutter: rgb(243 243 243);
+	--sidebar-header: rgb(250 250 250);
+	--window-top-border: rgb(0 0 0 / 0.35);
+}
+
+.dark {
+	--background: rgb(19 20 22);
+	--foreground: rgb(215 215 219);
+	--card: rgb(27 27 30);
+	--card-foreground: rgb(215 215 219);
+	--popover: rgb(30 30 32);
+	--popover-foreground: rgb(221 221 226);
+	--primary: rgb(208 208 214);
+	--primary-foreground: rgb(19 20 22);
+	--secondary: rgb(42 42 45);
+	--secondary-foreground: rgb(215 215 219);
+	--muted: rgb(42 42 45);
+	--muted-foreground: rgb(151 152 157);
+	--accent: rgb(46 47 51);
+	--accent-foreground: rgb(221 221 226);
+	--destructive: rgb(243 98 95);
+	--border: rgb(110 110 114 / 0.28);
+	--input: rgb(110 110 114 / 0.34);
+	--ring: rgb(133 134 139);
+
+	--success: rgb(74 222 128);
+	--success-bg: color-mix(in srgb, var(--success) 16%, transparent);
+	--warning: rgb(251 191 36);
+	--warning-bg: color-mix(in srgb, var(--warning) 16%, transparent);
+	--info: rgb(96 165 250);
+	--info-bg: color-mix(in srgb, var(--info) 16%, transparent);
+
+	--chrome: rgb(27 27 30);
+	--data-grid-cell-selected-bg: rgb(30 64 96);
+	--chrome-muted: rgb(32 32 36);
+	--grid-header: rgb(32 32 34);
+	--gutter: rgb(23 23 25);
+	--sidebar-header: rgb(25 25 28);
+	--window-top-border: rgb(255 255 255 / 0.18);
+}
