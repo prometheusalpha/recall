@@ -265,6 +265,41 @@ export const useSqlFilesStore = defineStore("sqlFiles", () => {
 	}
 
 	/**
+	 * Re-earns a version token for each tab a previous session left behind.
+	 *
+	 * A tab's `path` and `savedSql` outlive the process, but a version token
+	 * cannot: sending none means "create this file, refuse if it exists", so
+	 * the first autosave after a restart would report a conflict against a file
+	 * nobody had touched. The token is adopted only when the file still holds
+	 * the text the tab was last saved with — when it does not, something wrote
+	 * the file while the app was closed, and that write has to stay
+	 * unguarded so the change is reported rather than overwritten.
+	 *
+	 * A file that is gone earns nothing either, and so the next save creates
+	 * it — the same thing an unversioned path has always done, and the reason
+	 * that path has no token to be checked against in the first place.
+	 */
+	async function rehydrateVersions(
+		entries: ReadonlyArray<{ path: string; savedSql: string }>,
+	): Promise<void> {
+		for (const entry of entries) {
+			try {
+				// Not `read`: that adopts the token unconditionally, which is
+				// the adoption this has to check for first.
+				const result = await rpc.request.readSqlFile(
+					{ path: entry.path },
+					{ maxRequestTime: RPC_TIMEOUTS.metadata },
+				);
+				if (result.content === entry.savedSql) {
+					versions.value[entry.path] = result.version;
+				}
+			} catch {
+				// Nothing to earn. The next save reports the reason.
+			}
+		}
+	}
+
+	/**
 	 * Saves a file, guarded by the version from the last read.
 	 *
 	 * A conflict is returned rather than thrown: it is an expected outcome the
@@ -622,6 +657,7 @@ export const useSqlFilesStore = defineStore("sqlFiles", () => {
 		setBinding,
 		read,
 		save,
+		rehydrateVersions,
 		createEntry,
 		renameEntry,
 		deleteEntry,

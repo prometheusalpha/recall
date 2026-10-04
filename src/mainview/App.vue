@@ -28,12 +28,14 @@ import { useConnectionsStore } from "./stores/connections";
 import { useBookmarksStore } from "./stores/bookmarks";
 import { useTabClose } from "./composables/useTabClose";
 import { registerCommand, runCommand, useShortcuts } from "./composables/useShortcuts";
+import { useSqlFilesStore } from "./stores/sqlFiles";
 
 const tabs = useTabsStore();
 // Bookmarks are hydrated once, here: the editor's gutter and the window-level
 // `Mod-<character>` jump both read this one store, and the backend is the only
 // side that knows the mapping.
 const bookmarks = useBookmarksStore();
+const sqlFiles = useSqlFilesStore();
 
 /** The 36 characters a mnemonic can be; one slot each, no more. */
 const MNEMONICS = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -215,6 +217,15 @@ onMounted(() => {
 	registerShortcutCommands();
 	window.addEventListener("keydown", onShortcutKeydown);
 	window.addEventListener("keydown", onBookmarkJumpKeydown);
+	// A restored tab holds a path but no version token, and that token is what
+	// a guarded save is checked against — so they are earned here, before the
+	// first keystroke can ask for a write. A table tab never saves, so it is
+	// not worth a read.
+	void sqlFiles.rehydrateVersions(
+		tabs.tabs
+			.filter((tab) => tab.path !== undefined && tab.mode === "query")
+			.map((tab) => ({ path: tab.path as string, savedSql: tab.savedSql })),
+	);
 });
 
 onBeforeUnmount(() => {

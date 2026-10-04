@@ -567,7 +567,7 @@ async function saveTab(tabId: string): Promise<void> {
 		saveBlocked.add(tabId);
 		toast(
 			result.reason === "conflict"
-				? "That file changed on disk — your edits were not written. Save over it from the File menu to replace it."
+				? "That file changed on disk — your edits were not written. Click the file again in the Files panel to save over it."
 				: "The file is no longer on disk — it was deleted or moved.",
 			8000,
 		);
