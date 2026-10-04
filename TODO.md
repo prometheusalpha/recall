@@ -32,7 +32,6 @@ Phase 5:
 - Icon của connection hiển thị loại db (Icon của mysql / postgres)
 
 Phase 6:
-- [x] Mnemonic bookmark có thể nhảy vào khi k mở file chứa cái mnemonic đó
 - [x] Pin row number ở bên trái khi scroll ngang
 - [x] Bug khi select cell cột cuối thì row number cell highlight lên
 - [x] Border ngăn cách editor và result ở màn sql chưa rõ ràng, và cần thêm khả năng kéo resize
@@ -40,8 +39,12 @@ Phase 6:
 Phase 7:
 - Paging ở màn table result grid
 - Keyboard shortcuts mechanism / settings, nhất là close others
+- Kéo thả phần resize trên dưới ở màn sql editor lại select text trong editor
+- Khi đặt cursor vào 1 query thì border câu query to đó, và khi cmd enter thì chỉ chạy câu query đó (giống datagrip)
 
 Sau:
+- [x] Mnemonic bookmark có thể nhảy vào khi k mở file chứa cái mnemonic đó (Chưa work)
 - Kéo thả vị trí cột
+- Auto suggest field / table ở editor
 - Gợi ý cột ở where và order by
 - Redis support
