@@ -131,7 +131,7 @@ function onKeydown(event: KeyboardEvent): void {
 					"
 					autofocus
 					placeholder="Search tables, files and connections…"
-					class="h-7 border-0 px-0 focus-visible:ring-0"
+					class="h-7 border-0 px-1 py-0 focus-visible:ring-0"
 					@keydown="onKeydown"
 				/>
 			</div>

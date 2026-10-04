@@ -14,12 +14,26 @@
  * one-column `Error` result, and `result.error` is set, so the failure renders
  * as a centred panel in the same place the rows would have been.
  */
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { CSSProperties } from "vue";
-import { ArrowDown, ArrowUp, Download, TriangleAlertIcon } from "lucide-vue-next";
+import {
+	ArrowDown,
+	ArrowUp,
+	ChevronLeft,
+	ChevronRight,
+	ChevronsLeft,
+	Download,
+	TriangleAlertIcon,
+} from "lucide-vue-next";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
 import type { StatementResult } from "../../../shared/types";
+import {
+	autoColumnWidth,
+	GRID_CHAR_WIDTH,
+	measureCharWidth,
+	sampleColumnValues,
+} from "../../lib/gridColumnWidth";
 import { toast } from "../../composables/useToast";
 import { errorMessage, rpc } from "../../lib/rpc";
 import {
@@ -28,6 +42,7 @@ import {
 } from "../../composables/useGridSelection";
 import { Button } from "../ui/button";
 import {
+	DropdownMenuCheckboxItem,
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
@@ -40,14 +55,29 @@ import ResultFilterBar from "./ResultFilterBar.vue";
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
 const ROW_NUMBER_WIDTH = 56;
+/** Fallback width for a column with no measurement and no override. */
 const DEFAULT_COLUMN_WIDTH = 160;
+/**
+ * Floor for a MANUAL drag only. An auto width is allowed below it (down to
+ * `GRID_MIN_AUTO_WIDTH`), and that is the whole point of the feature: an `id`
+ * column holding `1..500` should read as the narrow column it is, and a 120px
+ * floor made every such column look empty. The floor survives for the drag
+ * because a user who can drag a column to zero has a column they cannot get
+ * back by dragging it out again — only by the double-click, which is not a
+ * gesture anyone reaches for on a collapsed column.
+ */
 const MIN_COLUMN_WIDTH = 120;
 
 const props = withDefaults(
 	defineProps<{
 		/** One statement's outcome. */
 		result: StatementResult;
-		/** Column width in px; never drops below 120px. */
+		/**
+		 * Last-resort width in px for a column nothing else sized: it is what
+		 * a result with no rows at all falls back to. A result that has rows
+		 * is auto-fitted from its content, and a dragged column keeps the
+		 * width it was dragged to.
+		 */
 		columnWidth?: number;
 		/**
 		 * The table this result came from. Present only for a table tab, and it
@@ -74,6 +104,18 @@ const props = withDefaults(
 		filterable?: boolean;
 		/** Column names to omit, for the popover that lives in the context row. */
 		hiddenColumns?: Set<string>;
+		/**
+		 * 1-based page of the result set. A table tab pages; a query tab does
+		 * not, and leaves this undefined so the pager renders nothing at all
+		 * rather than showing controls that would do nothing.
+		 */
+		page?: number;
+		/** Rows fetched per page. */
+		pageSize?: number;
+		/** Sizes the page-size menu offers. */
+		pageSizeOptions?: number[];
+		/** Whether the page that produced this result came back full. */
+		hasNextPage?: boolean;
 	}>(),
 	{
 		columnWidth: DEFAULT_COLUMN_WIDTH,
@@ -83,6 +125,9 @@ const props = withDefaults(
 		orderBy: "",
 		filterable: false,
 		hiddenColumns: () => new Set<string>(),
+		pageSize: 1000,
+		pageSizeOptions: () => [100, 500, 1000, 5000],
+		hasNextPage: false,
 	},
 );
 
@@ -103,10 +148,55 @@ const emit = defineEmits<{
 	"update:visibleColumns": [columns: string[]];
 	/** Enter in either filter field: re-run the statement with the new filter. */
 	applyFilter: [];
+	/**
+	 * The workspace owns the page and re-runs the statement; this grid never
+	 * holds page state of its own, it only asks for another page.
+	 */
+	"update:page": [page: number];
+	"update:pageSize": [size: number];
 }>();
 
 const error = computed(() => props.result.error);
 const rows = computed(() => props.result.rows);
+
+/**
+ * Rows the current page starts after, so the gutter can number rows as if the
+ * whole result set were loaded at once. Zero without a `page` prop, which is
+ * how a query tab keeps its numbering starting at 1.
+ */
+const pageOffset = computed(() =>
+	props.page === undefined ? 0 : (props.page - 1) * props.pageSize,
+);
+
+/**
+ * A new page is a different set of rows at a different height; keeping the old
+ * scroll position would open page 2 at the bottom of page 1 and show an empty
+ * body that looks like the query returned nothing. The reset waits for the
+ * next tick because the prop arrives with the new rows, not before them.
+ */
+watch(
+	() => props.page,
+	() => {
+		void nextTick(() => {
+			const body = scrollerNode();
+			if (body) body.scrollTop = 0;
+		});
+	},
+);
+
+function goToPage(page: number): void {
+	if (page < 1) return;
+	emit("update:page", page);
+}
+
+function selectPageSize(size: number): void {
+	if (size <= 0 || size === props.pageSize) return;
+	// The new size changes how many rows precede this page, so staying put
+	// would land on a different result entirely. Going back to the first page
+	// is the only offset that means the same thing under both sizes.
+	emit("update:pageSize", size);
+	emit("update:page", 1);
+}
 
 /**
  * Columns the user has hidden. Owned by the workspace so the popover in the
@@ -303,30 +393,140 @@ watch(
 		scrollerResizeObserver = null;
 		const element = scroller?.$el;
 		if (!(element instanceof HTMLElement)) return;
-		scrollerResizeObserver = new ResizeObserver(() => measureScrollbarGutter());
+		scrollerResizeObserver = new ResizeObserver(() => {
+			measureScrollbarGutter();
+			// The font is read off a rendered cell, so a pane that changes
+			// which cells are painted has to be allowed to re-read it.
+			measureCellFont();
+		});
 		scrollerResizeObserver.observe(element);
 		measureScrollbarGutter();
 	},
 	{ immediate: true, flush: "post" },
 );
 
-
-
 /**
- * Explicit width per column, keyed by name. Absent means the shared default.
+ * Manual column widths, keyed by column name.
+ *
+ * **Presence of the key is the whole contract**: a key here means "the user
+ * sized this", and its value is the width to use — there is no separate
+ * user-sized flag, because the only two things that write here are a drag and
+ * the re-fit double-click. An absent key means the column auto-fits.
+ *
  * Keying by name rather than index is what lets a width survive hiding a
- * different column and re-running the statement.
+ * different column, reordering, and re-running the statement.
  */
 const columnWidths = ref<Record<string, number>>({});
 
-const columnPixelWidth = computed(() =>
-	Math.max(MIN_COLUMN_WIDTH, props.columnWidth),
-);
 
-/** Width of one rendered column, honouring any per-column override. */
+/**
+ * Advance width of one character in the grid's monospace face, in px.
+ *
+ * Starts at the library default because the first paint has no measured cell
+ * to read a font off; `measureCellFont` replaces it as soon as there is one.
+ */
+const charWidth = ref(GRID_CHAR_WIDTH);
+
+/**
+ * Fitted width per visible column, keyed by name like `columnWidths`.
+ *
+ * Sampling reads the RESULT column index, never the visible one: once a column
+ * is hidden the visible indexes slide left, and measuring through them would
+ * quietly size each remaining column to its neighbour's values.
+ *
+ * Dependencies are `props.result`, `columns`, `columnIndexes` and `charWidth`,
+ * and nothing else — the sample is the expensive half, so it must not re-run on
+ * a scroll or a selection change. `charWidth` is a dependency despite reading
+ * like a constant: without it the post-`fonts.ready` re-measure would move the
+ * number and no width would follow.
+ */
+const autoColumnWidths = computed<Record<string, number>>(() => {
+	const result = props.result;
+	const fitted: Record<string, number> = {};
+	columns.value.forEach((column, visibleIndex) => {
+		const resultIndex = columnIndexes.value[visibleIndex];
+		// A name can survive in `columns` that the result no longer carries
+		// (a stale reorder overlay); there is nothing to sample for it.
+		if (resultIndex === undefined || resultIndex < 0) return;
+		fitted[column] = autoColumnWidth({
+			header: column,
+			values: sampleColumnValues(result.rows, resultIndex),
+			charWidth: charWidth.value,
+		});
+	});
+	return fitted;
+});
+
+/** The caller's width, used when a column has neither an override nor a fit. */
+const columnPixelWidth = computed(() => props.columnWidth);
+
+/**
+ * Width of one rendered column.
+ *
+ * Precedence is override → auto → the `columnWidth` prop:
+ *  - a dragged column keeps its dragged width, so the fit cannot snap it back
+ *    when the result changes;
+ *  - an untouched column re-fits on every new result, hiding or un-hiding a
+ *    column, or font measurement;
+ *  - the prop is the last resort, for a column with nothing to measure.
+ *
+ * Only the override is floored at {@link MIN_COLUMN_WIDTH}. An auto width is
+ * left alone, so it can go all the way down to `GRID_MIN_AUTO_WIDTH` — the
+ * 120px drag floor is a hand-sized minimum, and applying it to a fitted width
+ * would put back exactly the empty-looking narrow columns the auto fit exists
+ * to remove.
+ */
 function widthFor(column: string): number {
-	return Math.max(MIN_COLUMN_WIDTH, columnWidths.value[column] ?? columnPixelWidth.value);
+	const dragged = columnWidths.value[column];
+	if (dragged !== undefined) return Math.max(MIN_COLUMN_WIDTH, dragged);
+	return autoColumnWidths.value[column] ?? columnPixelWidth.value;
 }
+
+/**
+ * Re-measures the character width against the font a rendered cell is
+ * actually painted in, and re-fits anything the user has not sized.
+ *
+ * `getComputedStyle` on a live `.grid-cell` rather than a hardcoded shorthand:
+ * the mono face is a CSS variable, so its size and family can change with the
+ * theme, and a literal would size every column against a face the grid does
+ * not use. The cell is read for its resolved values only — nothing is
+ * mutated.
+ *
+ * Does nothing when no cell is rendered yet (an empty result, or a hidden
+ * grid), leaving the library default in place until there is one.
+ */
+function measureCellFont(): void {
+	const cell = scrollerNode()?.querySelector<HTMLElement>(".grid-cell");
+	if (!cell) return;
+	const style = getComputedStyle(cell);
+	const shorthand = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+	const measured = measureCharWidth(shorthand);
+	if (measured > 0) charWidth.value = measured;
+}
+
+/**
+ * The grid is mounted against a font that may not have loaded yet: the first
+ * paint measures the fallback face, and every column sized against it stays
+ * that way for the life of the result because nothing else changes
+ * `charWidth`. `document.fonts.ready` is the one signal that the real face
+ * has arrived, so the measurement is repeated once it resolves.
+ */
+onMounted(() => {
+	void nextTick(measureCellFont);
+	void document.fonts?.ready.then(() => {
+		void nextTick(measureCellFont);
+	});
+});
+
+/**
+ * Re-fits the columns whenever the set of rendered cells changes underneath
+ * the measurement — a new result paints different cells, and an emptied or
+ * refilled body would otherwise leave `charWidth` describing a cell that no
+ * longer exists.
+ */
+watch(rows, () => {
+	void nextTick(measureCellFont);
+});
 
 function totalWidthFor(list: string[]): number {
 	return ROW_NUMBER_WIDTH + list.reduce((sum, column) => sum + widthFor(column), 0);
@@ -651,6 +851,15 @@ function reorderColumn(from: number, to: number): void {
 	}
 }
 
+/**
+ * Writes the dragged width. This is also what MARKS the column as user-sized —
+ * the first move writes the key, and from then on `widthFor` reads the
+ * override and ignores the fit, so no later result, hide or re-measure can
+ * snap the column back while the pointer is still down.
+ *
+ * The floor is {@link MIN_COLUMN_WIDTH} rather than the auto minimum: a drag
+ * is a hand gesture and must not be able to collapse a column to nothing.
+ */
 function onColumnResizeMove(event: PointerEvent): void {
 	const state = resizing.value;
 	if (!state) return;
@@ -666,8 +875,21 @@ function stopColumnResize(): void {
 	window.removeEventListener("pointerup", stopColumnResize);
 }
 
-/** Double-click restores the shared default, which is how every tool does it. */
-function resetColumnWidth(column: string): void {
+/**
+ * Double-click drops the manual width so the column goes back to fitting its
+ * content.
+ *
+ * "Reset to default" would be the wrong name now that there is a default to
+ * return TO: the width this restores is the fitted one, which changes with
+ * every result. Deleting the key is the whole operation — `widthFor` already
+ * falls through to `autoColumnWidths` — and it is the only thing that clears
+ * the user-sized marker, which is why it cannot be faked by writing a width.
+ *
+ * Guarded on absence so a double-click on an already-fitted column does not
+ * churn the map, and so a fitted-but-unrendered column is not treated as an
+ * override.
+ */
+function refitColumnWidth(column: string): void {
 	if (columnWidths.value[column] === undefined) return;
 	const next = { ...columnWidths.value };
 	delete next[column];
@@ -1262,15 +1484,16 @@ function rowKey(_row: unknown, index: number): number {
 						:class="dropMarker?.edge === 'trailing' ? 'right-0' : 'left-0'"
 					/>
 					<!-- The handle sits on the column's trailing edge; a
-					     double-click on it restores the shared default. -->
+					     double-click on it re-fits the column to its content,
+					     undoing the manual width. -->
 					<div
 						class="grid-column-resize"
 						role="separator"
 						aria-orientation="vertical"
 						:aria-label="`Resize ${column}`"
-						:title="`Resize ${column} — double-click to reset`"
+						:title="`Resize ${column} — double-click to fit to content`"
 						@pointerdown="startColumnResize($event, column)"
-						@dblclick.stop="resetColumnWidth(column)"
+						@dblclick.stop="refitColumnWidth(column)"
 					/>
 				</div>
 			</div>
@@ -1310,7 +1533,12 @@ function rowKey(_row: unknown, index: number): number {
 							:data-selected="rowIsSelected(index)"
 							@click="onRowNumberClick(index, $event)"
 						>
-							{{ index + 1 }}
+							<!-- 1-based, and global across pages: page 2 of a
+							     1000-row page starts at 1001, not 1. A user
+							     comparing two pages reads these as positions in
+							     one result set, so numbering per page would
+							     silently point them at the wrong rows. -->
+							{{ index + 1 + pageOffset }}
 						</div>
 						<div
 							v-for="(column, columnIndex) in columns"
@@ -1425,6 +1653,76 @@ function rowKey(_row: unknown, index: number): number {
 				</span>
 
 				<div class="flex min-w-0 items-center gap-1">
+					<!-- The pager sits ahead of Export and only exists for a
+					     table tab: no `page` prop means no result-set paging,
+					     and rendering the controls anyway would offer a
+					     "Page 1" the workspace cannot act on.
+
+					     There is deliberately no Last button and no
+					     jump-to-page input. Both need a row count the
+					     statement never returned — the query is limited and
+					     the total is unknown — so they could only ever
+					     guess. Next stays enabled on a full page, which is
+					     the only evidence a further page exists. -->
+					<template v-if="page !== undefined">
+						<DropdownMenu>
+							<DropdownMenuTrigger as-child>
+								<Button
+									size="micro"
+									variant="ghost"
+									class="shrink-0"
+									aria-label="Rows per page"
+								>
+									{{ pageSize }} rows
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent class="w-40" aria-label="Rows per page">
+								<DropdownMenuCheckboxItem
+									v-for="size in pageSizeOptions"
+									:key="size"
+									:checked="size === pageSize"
+									@select="selectPageSize(size)"
+								>
+									{{ size }} rows
+								</DropdownMenuCheckboxItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
+
+						<Button
+							size="micro"
+							variant="ghost"
+							class="shrink-0"
+							aria-label="First page"
+							:disabled="page <= 1"
+							@click="goToPage(1)"
+						>
+							<ChevronsLeft class="size-3" aria-hidden="true" />
+						</Button>
+						<Button
+							size="micro"
+							variant="ghost"
+							class="shrink-0"
+							aria-label="Previous page"
+							:disabled="page <= 1"
+							@click="goToPage(page - 1)"
+						>
+							<ChevronLeft class="size-3" aria-hidden="true" />
+						</Button>
+						<span class="shrink-0 tabular-nums text-muted-foreground">
+							Page {{ page }}
+						</span>
+						<Button
+							size="micro"
+							variant="ghost"
+							class="shrink-0"
+							aria-label="Next page"
+							:disabled="!hasNextPage"
+							@click="goToPage(page + 1)"
+						>
+							<ChevronRight class="size-3" aria-hidden="true" />
+						</Button>
+					</template>
+
 					<Button
 						size="micro"
 						variant="ghost"

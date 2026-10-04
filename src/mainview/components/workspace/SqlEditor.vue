@@ -830,45 +830,160 @@ async function mountEditor(): Promise<void> {
 			}),
 	});
 
+	/** The statement under the caret, as the range its outline is drawn over. */
+	interface OutlineRange {
+		/** Offset of the statement's first character. */
+		from: number;
+		/** Offset just past the statement's last character. */
+		to: number;
+	}
+
+	/** The box a statement's outline occupies, in layer-marker pixels. */
+	interface OutlineRect {
+		left: number;
+		top: number;
+		width: number;
+		height: number;
+	}
+
 	/**
-	 * Builds the box for the statement under the caret: a translucent fill over
-	 * the statement's text, plus a rule along the top of its first line and
-	 * along the bottom of its last one. Without the two rules a multi-line
-	 * statement reads as one loose paragraph of tint and the file stops looking
-	 * like a stack of separately runnable statements; a statement that fits on
-	 * one line needs both rules at once, hence its own class.
+	 * Breathing room between the statement's text and the outline's border.
+	 * Without it the 1px border is centred on the first and last glyphs and
+	 * shaves a column off them.
 	 */
-	function outlineStatement(state: CmState.EditorState): CmView.DecorationSet {
+	const OUTLINE_INSET_PX = 1;
+
+	/**
+	 * The statement under the caret, as the range the outline box spans.
+	 *
+	 * Kept as a range rather than as coordinates because coordinates are a
+	 * question only a laid-out view can answer: the field is what the box is
+	 * drawn *from*, and it stays correct across the transactions that move the
+	 * text out from under an already-computed rectangle.
+	 */
+	function outlineStatement(state: CmState.EditorState): OutlineRange | null {
 		const statement = statementAt(
 			state.doc.toString(),
 			state.selection.main.head,
 		);
-		if (!statement) return V.Decoration.none;
-		const doc = state.doc;
-		const first = doc.lineAt(statement.start);
-		// `end` sits just past the statement's last character, so the line the
-		// statement ends on is the one holding `end - 1`.
-		const last = doc.lineAt(statement.end - 1);
-		const single = first.number === last.number;
-		const ranges: CmState.Range<CmView.Decoration>[] = [
-			V.Decoration.mark({ class: "cm-statement-range" }).range(
-				statement.start,
-				statement.end,
-			),
-			V.Decoration.line({
-				class: single
-					? "cm-statement-line cm-statement-line--solo"
-					: "cm-statement-line cm-statement-line--first",
-			}).range(first.from),
-		];
-		if (!single) {
-			ranges.push(
-				V.Decoration.line({
-					class: "cm-statement-line cm-statement-line--last",
-				}).range(last.from),
+		if (!statement) return null;
+		return { from: statement.start, to: statement.end };
+	}
+
+	/**
+	 * Last non-blank character offset in `[from, to)`, or `null` when the
+	 * slice holds nothing but whitespace.
+	 */
+	function lastContentOffset(
+		doc: CmState.Text,
+		from: number,
+		to: number,
+	): number | null {
+		const content = doc.sliceString(from, to).trimEnd();
+		return content.length ? from + content.length - 1 : null;
+	}
+
+	/**
+	 * Pixel rectangle of the outline box around `[from, to)`, in the document
+	 * coordinates a layer marker is positioned in. `null` when the statement
+	 * is not rendered at all.
+	 *
+	 * The left edge is the statement's own first character, so an indented
+	 * statement is boxed at its indentation rather than at the editor's
+	 * margin; the right edge is the last non-blank character of the *widest*
+	 * line, because a short closing line must not stretch the box out to the
+	 * edge of the editor.
+	 *
+	 * Both edges are measured line by line rather than from the statement's two
+	 * ends, and that is the whole reason this is geometry and not a
+	 * decoration: a mark spans one line and a line decoration spans the
+	 * editor's full width, and neither of them can say "stop where the text
+	 * stops".
+	 */
+	function statementOutlineRect(
+		view: CmView.EditorView,
+		from: number,
+		to: number,
+	): OutlineRect | null {
+		const doc = view.state.doc;
+		// A range that holds nothing has no rightmost character to look for,
+		// and `to - 1` would reach back into whatever precedes it.
+		if (to <= from) return null;
+		// `to` sits just past the statement's last character, so the line the
+		// statement ends on is the one holding `to - 1`.
+		const firstLine = doc.lineAt(from);
+		const lastLine = doc.lineAt(to - 1);
+		// Layer markers are positioned relative to the document while
+		// `coordsAtPos` reports viewport coordinates, so undo the scroller's
+		// own offset and its scroll position to get from one to the other.
+		const base = view.scrollDOM.getBoundingClientRect();
+		const layerX = (x: number) =>
+			(x - base.left) / view.scaleX + view.scrollDOM.scrollLeft;
+		const layerY = (y: number) =>
+			(y - base.top) / view.scaleY + view.scrollDOM.scrollTop;
+
+		// A line scrolled out of the viewport has no coordinates;
+		// `lineBlockAt` measures from the document's own height map and always
+		// has an answer. Its coordinates start at `documentTop` — the first
+		// line's top, *not* the top of the padded content box the layer's
+		// origin sits at — so the content padding has to be added back or the
+		// box jumps by that much the moment a line leaves the viewport.
+		const paddingTop = view.documentPadding.top;
+		const startCoords = view.coordsAtPos(from, 1);
+		const endCoords = view.coordsAtPos(to - 1, 1);
+		const top = startCoords
+			? layerY(startCoords.top)
+			: view.lineBlockAt(from).top + paddingTop;
+		const bottom = endCoords
+			? layerY(endCoords.bottom)
+			: view.lineBlockAt(to - 1).bottom + paddingTop;
+		if (bottom - top <= 0) return null;
+
+		// The left edge belongs to the statement's *first* character and to
+		// nothing else. Taking the minimum across every line would drag it out
+		// to the editor margin as soon as one continuation line was less
+		// indented than the statement's opening one, which is exactly the
+		// thing the outline is supposed to show. So it is read off the first
+		// line alone and the rest of the loop never touches it.
+		let left = Infinity;
+		let right = -Infinity;
+		let wraps = false;
+		for (let number = firstLine.number; number <= lastLine.number; number++) {
+			const line = doc.line(number);
+			const lineFrom = Math.max(line.from, from);
+			const lineTo = Math.min(line.to, to);
+			const lineStart = view.coordsAtPos(lineFrom, 1);
+			// Off-viewport lines contribute nothing: they are not laid out, so
+			// they have no rightmost character to report.
+			if (!lineStart) continue;
+			if (number === firstLine.number) left = lineStart.left;
+			// A blank line inside the statement contributes only its start x.
+			const content = lastContentOffset(doc, lineFrom, lineTo);
+			const lineEnd =
+				content === null ? lineStart : view.coordsAtPos(content, 1);
+			if (!lineEnd) continue;
+			right = Math.max(right, lineEnd.right);
+			// A soft-wrapped line keeps filling the content width on its
+			// intermediate visual rows even when its last one is short, so the
+			// statement's right edge is the content edge, not its last glyph.
+			// Only the right edge moves: the left stays on the opening
+			// character, wrap or no wrap.
+			if (Math.abs(lineEnd.top - lineStart.top) > 1) wraps = true;
+		}
+		if (!isFinite(left) || !isFinite(right)) return null;
+		if (wraps) {
+			right = Math.max(
+				right,
+				view.contentDOM.getBoundingClientRect().right,
 			);
 		}
-		return V.Decoration.set(ranges, true);
+
+		return {
+			left: layerX(left) - OUTLINE_INSET_PX,
+			top: top - OUTLINE_INSET_PX,
+			width: right - left + OUTLINE_INSET_PX * 2,
+			height: bottom - top + OUTLINE_INSET_PX * 2,
+		};
 	}
 
 	/**
@@ -886,16 +1001,61 @@ async function mountEditor(): Promise<void> {
 	 * without it the previous tab's outline would stay on screen over the new
 	 * document until the next keystroke.
 	 */
-	const statementOutline = S.StateField.define<CmView.DecorationSet>({
+	const statementOutline = S.StateField.define<OutlineRange | null>({
 		create: (state) => outlineStatement(state),
-		update: (deco, transaction) => {
+		update: (range, transaction) => {
 			const changed =
 				transaction.docChanged ||
 				transaction.selection ||
 				transaction.effects.some((effect) => effect.is(setDocTab));
-			return changed ? outlineStatement(transaction.state) : deco;
+			return changed ? outlineStatement(transaction.state) : range;
 		},
-		provide: (field) => V.EditorView.decorations.from(field),
+	});
+
+	/**
+	 * The outline box itself, drawn as one layer marker.
+	 *
+	 * A `layer` rather than a decoration for the reason given on
+	 * `statementOutlineRect`: the shape cannot be expressed as a mark or a
+	 * line class. It also has to sit *above* the content so the active-line
+	 * tint cannot paint over the border, which is why the box carries
+	 * `pointer-events: none` — otherwise it would swallow every click inside
+	 * itself, including the ones that place the caret.
+	 */
+	const statementOutlineLayer = V.layer({
+		above: true,
+		class: "cm-statement-outline",
+		update(update: CmView.ViewUpdate): boolean {
+			// The box is positioned in document coordinates, so scrolling
+			// cannot move it — but a scroll that brings previously unmeasured
+			// lines into view can change how wide the box has to be.
+			if (update.viewportChanged || update.geometryChanged) return true;
+			if (
+				update.transactions.some((transaction) =>
+					transaction.effects.some((effect) => effect.is(setDocTab)),
+				)
+			)
+				return true;
+			const before = update.startState.field(statementOutline);
+			const after = update.state.field(statementOutline);
+			if (!before || !after) return before !== after;
+			return before.from !== after.from || before.to !== after.to;
+		},
+		markers(view: CmView.EditorView): readonly CmView.LayerMarker[] {
+			const outline = view.state.field(statementOutline);
+			if (!outline) return [];
+			const rect = statementOutlineRect(view, outline.from, outline.to);
+			if (!rect) return [];
+			return [
+				new V.RectangleMarker(
+					"cm-statement-box",
+					rect.left,
+					rect.top,
+					rect.width,
+					rect.height,
+				),
+			];
+		},
 	});
 
 	const languageCompartment = new S.Compartment();
@@ -913,14 +1073,7 @@ async function mountEditor(): Promise<void> {
 		V.EditorView.editable.of(!locked),
 	];
 
-	// Colours come from the token palette globals.css already defines. The
-	// outline's two rules are spelled out here rather than inlined at each
-	// selector because the single-line case needs both in one declaration and
-	// three copies of the same `color-mix` is where the themes would drift.
-	const outlineTop =
-		"inset 0 1px 0 color-mix(in srgb, var(--primary) 45%, transparent)";
-	const outlineBottom =
-		"inset 0 -1px 0 color-mix(in srgb, var(--primary) 45%, transparent)";
+	// Colours come from the token palette globals.css already defines.
 	const editorTheme = (dark: boolean) =>
 		V.EditorView.theme(
 			{
@@ -949,19 +1102,20 @@ async function mountEditor(): Promise<void> {
 					backgroundColor:
 						"color-mix(in srgb, var(--accent) 40%, transparent)",
 				},
-				// The statement outline. A fill strong enough to find at a
-				// glance would fight the selection and the active-line tint it
-				// sits on top of, so it stays a hint and the two rules carry the
-				// read. `--primary` is near-black in light and near-white in
-				// dark, so the same mix reads on both without a second token.
-				".cm-statement-range": {
+				// The statement outline: one rounded rectangle drawn by
+				// `statementOutlineLayer`, sized to the statement's text
+				// rather than to the editor. The fill stays a hint — strong
+				// enough to find at a glance, weak enough not to fight the
+				// selection and the active-line tint it sits on top of — and
+				// the border carries the read. `--primary` is near-black in
+				// light and near-white in dark, so the same mixes read on
+				// both without a second token.
+				".cm-statement-box": {
+					pointerEvents: "none",
+					border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)",
+					borderRadius: "5px",
 					backgroundColor:
 						"color-mix(in srgb, var(--primary) 7%, transparent)",
-				},
-				".cm-statement-line--first": { boxShadow: outlineTop },
-				".cm-statement-line--last": { boxShadow: outlineBottom },
-				".cm-statement-line--solo": {
-					boxShadow: `${outlineTop}, ${outlineBottom}`,
 				},
 				".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
 					backgroundColor:
@@ -1008,6 +1162,7 @@ async function mountEditor(): Promise<void> {
 				V.lineNumbers(),
 				bookmarkGutter,
 				statementOutline,
+				statementOutlineLayer,
 				// Assigning is a DOM event, registered ahead of the keymap:
 				// preventing the default is what stops `Ctrl-Shift-a` from also
 				// jumping to `a`.

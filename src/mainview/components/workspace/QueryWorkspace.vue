@@ -31,13 +31,24 @@ const MAX_RESULT_SIZE = 85;
 const DEFAULT_RESULT_SIZE = 45;
 const MIN_EDITOR_SIZE = 15;
 
+/** Page sizes offered in the grid's pager, smallest first. */
+const PAGE_SIZE_OPTIONS = [100, 500, 1000, 2000] as const;
+/** Rows a table tab asks for when it opens. 1000 is what the panel has always fetched in one go, so a table that fits does not suddenly become paged. */
+const DEFAULT_PAGE_SIZE = 1000;
+
 /**
- * How many rows a table browse asks for. A typed query is left alone — the
- * user's own LIMIT is theirs to write — but browsing a table has no such limit,
- * and an unbounded `SELECT *` on a large table is the common way to hang a
- * client. The status bar reports when this cuts the result short.
+ * A page size only means something the pager can render, so anything outside
+ * the offered range is pulled into it rather than honoured: a fractional size
+ * would round the row count, and a value that arrived from nowhere (a restored
+ * tab, a hand-edited store) would ask for a page the grid cannot describe.
  */
-const TABLE_BROWSE_LIMIT = 1000;
+function normalizePageSize(value: unknown): number {
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed)) return DEFAULT_PAGE_SIZE;
+	const min = PAGE_SIZE_OPTIONS[0];
+	const max = PAGE_SIZE_OPTIONS[PAGE_SIZE_OPTIONS.length - 1];
+	return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
 
 function clampResultSize(size: number): number {
 	return Math.min(MAX_RESULT_SIZE, Math.max(MIN_RESULT_SIZE, size));
@@ -178,6 +189,15 @@ const tableOrderBy = ref<Record<string, string>>({});
 /** Hidden column names per tab, so each table keeps its own column layout. */
 const hiddenColumnsByTab = ref<Record<string, string[]>>({});
 
+/**
+ * Which page of the table a tab is showing, and how many rows it asks for.
+ * Both are per tab for the same reason the sort and the filter are: two tables
+ * open side by side sit at different places in their own data, and switching
+ * back to one should land where it was left.
+ */
+const tablePage = ref<Record<string, number>>({});
+const tablePageSize = ref<Record<string, number>>({});
+
 function hiddenColumnsForTab(id: string | null): Set<string> {
 	return new Set(id ? (hiddenColumnsByTab.value[id] ?? []) : []);
 }
@@ -213,13 +233,99 @@ function setOrderBy(value: string): void {
 	tableOrderBy.value = { ...tableOrderBy.value, [id]: value };
 }
 
+const activePage = computed(() =>
+	tabId.value ? (tablePage.value[tabId.value] ?? 1) : 1,
+);
+const activePageSize = computed(() =>
+	tabId.value ? normalizePageSize(tablePageSize.value[tabId.value]) : DEFAULT_PAGE_SIZE,
+);
+
+/**
+ * The fixed sizes, plus whatever the tab is actually asking for. A size can
+ * only reach here from the menu or from a restored tab, but a tab that arrives
+ * mid-list would otherwise show a page number computed from a size the menu
+ * cannot name — and the user has no way back to it.
+ */
+function pageSizeOptions(current: number): number[] {
+	return [...new Set<number>([...PAGE_SIZE_OPTIONS, normalizePageSize(current)])].sort(
+		(a, b) => a - b,
+	);
+}
+
+const activePageSizeOptions = computed(() => pageSizeOptions(activePageSize.value));
+
 /** Enter in a filter field re-runs the statement; a header click must not
  *  clear what the user typed, so the two sorts are independent. */
 function applyFilter(): void {
 	const tab = activeTab.value;
 	if (!tab || tab.mode !== "table") return;
+	resetTablePage(tab);
 	void loadTable(tab);
 }
+
+/**
+ * Puts the tab back on page 1, for the callers that are about to re-run its
+ * SELECT.
+ *
+ * A new filter or a new ordering changes *which* rows the statement returns,
+ * not how many of them are shown, so the page it lands on has to go back to the
+ * start: row 900 of an unfiltered table is an arbitrary position once a WHERE
+ * clause is narrowing the set, and often past its end.
+ */
+function resetTablePage(tab: Tab): void {
+	if (tablePage.value[tab.id] === 1) return;
+	tablePage.value = { ...tablePage.value, [tab.id]: 1 };
+}
+
+/** Records the page the pager asked for and re-runs the statement there. */
+function setTablePage(tab: Tab, page: number): void {
+	const parsed = Number(page);
+	// There is no total to clamp against — the row count of the whole table is
+	// never asked for — so the grid's own "no next page" test is the only upper
+	// bound there is, and the floor keeps an emitted 0 or -1 off the statement.
+	const next = Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : 1;
+	if (tablePage.value[tab.id] === next) return;
+	tablePage.value = { ...tablePage.value, [tab.id]: next };
+	void loadTable(tab);
+}
+
+/** Records a new page size and re-runs from page 1 at that size. */
+function setTablePageSize(tab: Tab, size: number): void {
+	const next = normalizePageSize(size);
+	if (tablePageSize.value[tab.id] === next) return;
+	tablePageSize.value = { ...tablePageSize.value, [tab.id]: next };
+	// Page 5 of a 1000-row table is the tail of the table; at 100 rows it is
+	// usually past the end, and the grid would come back empty with no way back
+	// but the pager's first-page button.
+	resetTablePage(tab);
+	void loadTable(tab);
+}
+
+/** Pager wiring for a table tab's grid; a query tab's SQL is the user's. */
+function onPageChange(page: number): void {
+	const tab = activeTab.value;
+	if (!tab || tab.mode !== "table") return;
+	setTablePage(tab, page);
+}
+
+function onPageSizeChange(size: number): void {
+	const tab = activeTab.value;
+	if (!tab || tab.mode !== "table") return;
+	setTablePageSize(tab, size);
+}
+
+/**
+ * Whether a further page could exist, inferred from the page that came back.
+ *
+ * A short page is the last one — the statement asked for `pageSize` rows and
+ * the server had no more to give. A full page proves nothing either way, so the
+ * pager offers "next" and lets the click land on an empty page; a COUNT over the
+ * whole table would cost more than the page it is counting, which is the
+ * expense this paging exists to avoid.
+ */
+const hasNextPage = computed(
+	() => (activeResult.value?.rows.length ?? 0) >= activePageSize.value,
+);
 
 /**
  * Table tabs are read-only views, so their rows come from one `SELECT *`
@@ -267,8 +373,19 @@ function tableSelectSql(tab: Tab): string {
 	 * the backend truncates after the driver has already materialised every row,
 	 * so a client-side cap still pays for the whole table. Both dialects write
 	 * LIMIT the same way.
+	 *
+	 * Paging rides the same clause rather than slicing what came back, for the
+	 * same reason: `OFFSET n` lets the server skip the rows before the window,
+	 * which a browser holding 1000 rows could not do — it never saw them.
 	 */
-	return `SELECT * FROM ${target}${whereClause}${orderBy} LIMIT ${TABLE_BROWSE_LIMIT};`;
+	const pageSize = normalizePageSize(tablePageSize.value[tab.id]);
+	const page = tablePage.value[tab.id] ?? 1;
+	const offset = (page - 1) * pageSize;
+	// Page 1 is what almost every run is, and `OFFSET 0` buys nothing but a
+	// noisier statement in the status bar and the error panel — so it is left off
+	// and only pages past the first carry the clause.
+	const offsetClause = offset > 0 ? ` OFFSET ${offset}` : "";
+	return `SELECT * FROM ${target}${whereClause}${orderBy} LIMIT ${pageSize}${offsetClause};`;
 }
 
 /**
@@ -405,6 +522,10 @@ function onGridSort(column: string, direction: "asc" | "desc"): void {
 	} else {
 		tableSort.value = { ...tableSort.value, [tab.id]: { column, direction } };
 	}
+	// A new ordering makes the current offset meaningless — the rows the user
+	// paged to were the tail of one order and are somewhere else entirely in
+	// the next — so the sort starts the tab back at page 1.
+	resetTablePage(tab);
 	void loadTable(tab);
 }
 
@@ -540,6 +661,12 @@ function retryTable(): void {
 					:hidden-columns="activeHiddenColumns"
 					:where="activeWhere"
 					:order-by="activeOrderBy"
+					:page="activePage"
+					:page-size="activePageSize"
+					:page-size-options="activePageSizeOptions"
+					:has-next-page="hasNextPage"
+					@update:page="onPageChange"
+					@update:page-size="onPageSizeChange"
 					@rerun="rerunActive"
 					@sort="onGridSort"
 					@update:visible-columns="setVisibleColumns"

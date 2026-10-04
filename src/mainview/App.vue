@@ -111,6 +111,8 @@ function onBookmarkJumpKeydown(event: KeyboardEvent): void {
 }
 
 const sidebarHidden = ref(false);
+/** Right-hand SQL files panel visibility, toggled from the toolbar. */
+const filesHidden = ref(false);
 
 /** Mirrored from the panels' own resize handles; drives nothing but layout. */
 const sidebarWidth = ref(260);
@@ -154,6 +156,7 @@ onBeforeUnmount(() => {
 			@settings="settingsOpen = true"
 			@toggle-sidebar="sidebarHidden = !sidebarHidden"
 			@quick-open="quickOpen.open.value = !quickOpen.open.value"
+			@toggle-files="filesHidden = !filesHidden"
 		/>
 		<div class="panel-gutter flex min-h-0 flex-1 gap-1 p-1">
 			<AppSidebar
@@ -168,6 +171,7 @@ onBeforeUnmount(() => {
 			<!-- Docked right: the files list frames the workspace, and a drag
 			     on its left edge does not fight the connections tree. -->
 			<SqlFilesPanel
+				v-show="!filesHidden"
 				class="shrink-0"
 				:style="{ width: `${filesWidth}px` }"
 				@resize="filesWidth = $event"

@@ -8,8 +8,6 @@ import {
 	FolderOpen,
 	FolderPlus,
 	FolderSearch,
-	PanelRightClose,
-	PanelRightOpen,
 	Pencil,
 	Scissors,
 	Trash2,
@@ -65,29 +63,21 @@ const emit = defineEmits<{
 	resize: [width: number];
 }>();
 
-/** Width at or below which the panel shows only its icon strip. */
-const COLLAPSED_WIDTH = 40;
-/** Width restored when the collapsed strip is opened again. */
-const RESTORED_WIDTH = 256;
+/**
+ * Width the panel opens at. Hiding it is the toolbar's job now, so this is
+ * just the starting width for the resize handle rather than a restore target.
+ */
+const DEFAULT_FILES_WIDTH = 256;
 
-const { width, startResize } = usePanelResize("files", RESTORED_WIDTH, {
+const { width, startResize } = usePanelResize("files", DEFAULT_FILES_WIDTH, {
 	min: 180,
 	max: 520,
 	side: "right",
 });
 
-const collapsed = computed(() => width.value <= COLLAPSED_WIDTH);
-
 /** The panel owns its width; the shell only reacts to changes. */
 watch(width, (value) => emit("resize", value));
 
-function collapse(): void {
-	width.value = COLLAPSED_WIDTH;
-}
-
-function restore(): void {
-	width.value = RESTORED_WIDTH;
-}
 
 /**
  * The file whose tab is on screen, so its row can show as selected. Derived
@@ -434,24 +424,6 @@ async function confirmDelete(): Promise<void> {
 		class="panel relative flex min-h-0 shrink-0 flex-col"
 		:style="{ width: `${width}px` }"
 	>
-		<!-- The collapsed strip and the tree are siblings, not branches: both stay
-		     mounted so reopening the panel restores the exact tree state, caches
-		     included, without another round of directory listings. -->
-		<div
-			v-if="collapsed"
-			class="flex h-10 shrink-0 items-center justify-center border-b border-border bg-sidebar-header"
-		>
-			<Button
-				size="icon"
-				variant="ghost"
-				class="h-6 w-6"
-				aria-label="Expand files panel"
-				@click="restore"
-			>
-				<PanelRightOpen aria-hidden="true" />
-			</Button>
-		</div>
-		<div v-show="!collapsed" class="flex min-h-0 flex-1 flex-col">
 		<div class="sidebar-header">
 			<span class="flex-1">Files</span>
 			<Button
@@ -480,15 +452,6 @@ async function confirmDelete(): Promise<void> {
 				@click="openFolder"
 			>
 				<FolderOpen aria-hidden="true" />
-			</Button>
-			<Button
-				size="icon"
-				variant="ghost"
-				class="h-6 w-6"
-				aria-label="Collapse files panel"
-				@click="collapse"
-			>
-				<PanelRightClose aria-hidden="true" />
 			</Button>
 		</div>
 
@@ -646,8 +609,8 @@ async function confirmDelete(): Promise<void> {
 			</DropdownMenu>
 		</template>
 
-		<!-- Both dialogs live outside the tree so a scrolled or collapsed panel
-		     never takes the prompt with it. -->
+		<!-- Both dialogs live outside the tree so a scrolled panel never takes
+		     the prompt with it. -->
 		<Dialog v-model:open="createOpen">
 			<DialogContent class="sm:max-w-md">
 				<DialogHeader>
@@ -692,7 +655,6 @@ async function confirmDelete(): Promise<void> {
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
-		</div>
 		<div
 			class="panel-resize-handle panel-resize-handle--left"
 			@pointerdown="startResize"

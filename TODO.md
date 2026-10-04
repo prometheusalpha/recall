@@ -38,7 +38,7 @@ Phase 6:
 
 Phase 7:
 - [x] Kéo thả phần resize trên dưới ở màn sql editor lại select text trong editor
-- [x] Khi đặt cursor vào 1 query thì border câu query to đó, và khi cmd enter thì chỉ chạy câu query đó (giống datagrip)
+- [x] 7.2. Khi đặt cursor vào 1 query thì border câu query to đó, và khi cmd enter thì chỉ chạy câu query đó (giống datagrip)
 - [x] Kéo thả vị trí cột
 
 Phase 8:
@@ -47,10 +47,18 @@ Phase 8:
 - [x] Bỏ cái phần 4 cái pill result-context-pill đi, mục Columns ở bên phải chúng nó thì cho xuống cạnh nút refresh. Bỏ cái All rows cạnh where đi
 - [x] Chọn cell rồi dùng phím mũi tên để di chuyển selection sang bên phải ngoài màn hình thì scroll không theo
 
+Phase 9:
+- [x] 9.1. 1 nút là folder sidebar toggle ở bên trái nút light/dark mode, thay cho nút collapse ở right sidebar, sử dụng icon folder-tree của lucide
+- [x] 9.2. Chuyển cái nút search đang ở bên trái nút collapse left sidebar sang ở bên trái cái nút định làm ở trên
+  - [x] 1 điểm: input của cái phần search này đang không có padding left, placeholder đang bị dính vào bên trái của text input
+- [x] 9.3. Phần border của 7.2 thiết kế lại, phải bo đủ 4 border, có màu, và chỉ bo đến cái ký tự xa nhất về phía bên phải
+- [x] Cell tự resize theo width của nội dung (có 1 min / max nào đó)
+- [x] Paging ở màn table result grid
+
 Sau:
-- Paging ở màn table result grid
 - Keyboard shortcuts mechanism / settings, nhất là close others
-- [x] Mnemonic bookmark có thể nhảy vào khi k mở file chứa cái mnemonic đó (Chưa work)
+- Mnemonic bookmark có thể nhảy vào khi k mở file chứa cái mnemonic đó (Chưa work)
 - Auto suggest field / table ở editor
 - Gợi ý cột ở where và order by
+- Cơ chế update
 - Redis support

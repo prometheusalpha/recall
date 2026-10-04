@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+	FolderTree,
 	Moon,
 	PanelLeftClose,
 	Play,
@@ -20,6 +21,7 @@ const emit = defineEmits<{
 	settings: [];
 	"toggle-sidebar": [];
 	"quick-open": [];
+	"toggle-files": [];
 }>();
 
 const NO_DRAG = "electrobun-webkit-app-region-no-drag";
@@ -59,15 +61,6 @@ function newQuery(): void {
 			<Button
 				variant="ghost"
 				size="icon"
-				aria-label="Quick open (Cmd/Ctrl+P)"
-				:class="NO_DRAG"
-				@click="emit('quick-open')"
-			>
-				<Search />
-			</Button>
-			<Button
-				variant="ghost"
-				size="icon"
 				aria-label="Toggle sidebar"
 				:class="NO_DRAG"
 				@click="emit('toggle-sidebar')"
@@ -92,6 +85,24 @@ function newQuery(): void {
 		<div class="flex-1 electrobun-webkit-app-region-drag"></div>
 
 		<div :class="['flex items-center gap-1', NO_DRAG]">
+			<Button
+				variant="ghost"
+				size="icon"
+				aria-label="Quick open (Cmd/Ctrl+P)"
+				:class="NO_DRAG"
+				@click="emit('quick-open')"
+			>
+				<Search />
+			</Button>
+			<Button
+				variant="ghost"
+				size="icon"
+				aria-label="Toggle files panel"
+				:class="NO_DRAG"
+				@click="emit('toggle-files')"
+			>
+				<FolderTree />
+			</Button>
 			<Button
 				variant="ghost"
 				size="icon"
