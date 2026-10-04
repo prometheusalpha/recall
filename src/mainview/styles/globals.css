@@ -476,6 +476,33 @@ overflow: hidden;
 }
 
 
+/* The header is a horizontal scroller of its own, paired with the body by
+   `scrollLeft`. Its own scrollbar is suppressed rather than shown: it would
+   eat the 28px the header band is exactly as tall as, clipping the labels,
+   and the body's scrollbar at the bottom already offers the same gesture. */
+.grid-header-scroll {
+	scrollbar-width: none;
+}
+
+.grid-header-scroll::-webkit-scrollbar {
+	display: none;
+}
+
+
+/* The rows are laid out at the full column width, but the scroller pins its
+   item wrapper to the viewport twice over: `.direction-vertical` sets
+   `width: 100%`, and the base rule sets `overflow: hidden`. Either one alone
+   is enough to destroy horizontal scrolling — the first caps the wrapper at
+   the viewport, the second clips the wide rows inside it — so the scroller
+   never gets a horizontal range and never shows a bar. Both are overridden
+   here, at a specificity that beats the library's own selectors, and the
+   wrapper is given the content width so the overflow registers as something
+   to scroll. The scroller itself still clips vertically, so nothing escapes
+   the grid vertically. */
+.grid-body > .vue-recycle-scroller__item-wrapper {
+	width: var(--grid-content-width, 100%);
+	overflow: visible;
+}
 .grid-header-cell {
 	display: flex;
 	align-items: center;

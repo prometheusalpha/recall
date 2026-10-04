@@ -33,6 +33,7 @@ Phase 5:
 
 Phase 6:
 - Keyboard shortcuts mechanism / settings, nhất là close others
+- Fix row number sang bên trái khi scroll
 - Mnemonic có thể nhảy khi k mở file
 - Paging ở màn table result grid
 - Bug khi select cell cột cuối thì row index highlight lên

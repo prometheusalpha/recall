@@ -139,7 +139,6 @@ const canEdit = computed(
  * height so it stays right when the split pane is dragged.
  */
 const pageRows = ref(20);
-const scrollerEl = ref<HTMLElement | null>(null);
 
 /**
  * The header's own horizontal scroller.
@@ -154,6 +153,23 @@ const scrollerEl = ref<HTMLElement | null>(null);
 const headerScrollEl = ref<HTMLElement | null>(null);
 
 /**
+ * The element that actually scrolls.
+ *
+ * `RecycleScroller` is the scroller: it carries `overflow-y: auto` itself, so
+ * `grid-body` around it never overflows and never scrolls. The rows hang off
+ * the scroller's item wrapper, which is pinned to `width: 100%` of the
+ * viewport — without the width override below, wide columns would spill out of
+ * that wrapper instead of giving the scroller a horizontal range, and the grid
+ * would lose horizontal scrolling altogether.
+ *
+ * Reading it off the component's root keeps `scrollTop`/`scrollLeft` and the
+ * header pairing pointed at the one element that has a range to scroll.
+ */
+function scrollerNode(): HTMLElement | null {
+	return (recycleRef.value?.$el as HTMLElement | undefined) ?? null;
+}
+
+/**
  * Keeps the header aligned with the body.
  *
  * Assignment is guarded because setting `scrollLeft` fires a scroll event on
@@ -162,7 +178,7 @@ const headerScrollEl = ref<HTMLElement | null>(null);
  * a feedback loop.
  */
 function syncHeaderScroll(): void {
-	const body = scrollerEl.value;
+	const body = scrollerNode();
 	const header = headerScrollEl.value;
 	if (!body || !header) return;
 	if (header.scrollLeft !== body.scrollLeft) header.scrollLeft = body.scrollLeft;
@@ -174,11 +190,13 @@ function syncHeaderScroll(): void {
  * off to the right, so it has to drive as well as follow.
  */
 function syncBodyScroll(): void {
-	const body = scrollerEl.value;
+	const body = scrollerNode();
 	const header = headerScrollEl.value;
 	if (!body || !header) return;
 	if (body.scrollLeft !== header.scrollLeft) body.scrollLeft = header.scrollLeft;
 }
+
+const recycleRef = ref<{ $el: HTMLElement } | null>(null);
 
 
 
@@ -660,7 +678,7 @@ function onKeydown(event: KeyboardEvent): void {
 	void nextTick(() => {
 		// Move the real scroll container too: the focus cell can be outside the
 		// rendered window, and the caret has to be visible to be useful.
-		const container = scrollerEl.value;
+		const container = scrollerNode();
 		if (!container) return;
 		const top = next.row * ROW_HEIGHT;
 		const bottom = top + ROW_HEIGHT;
@@ -804,7 +822,7 @@ function rowKey(_row: unknown, index: number): number {
 		     column's right border land beside it rather than under it. -->
 		<div
 			ref="headerScrollEl"
-			class="recall-scroll shrink-0 overflow-x-auto overflow-y-hidden"
+			class="grid-header-scroll shrink-0 overflow-x-auto overflow-y-hidden"
 			role="row"
 			:style="{ height: `${HEADER_HEIGHT}px` }"
 			@scroll="syncBodyScroll"
@@ -867,13 +885,19 @@ function rowKey(_row: unknown, index: number): number {
 			</div>
 		</div>
 
-		<!-- The vertical scroller spans the pane's full width, so its scrollbar
-		     sits on the pane's right edge and stays there however far the
-		     columns are scrolled. It scrolls horizontally too, which is what
-		     gives the rows a common left edge to share with the header. -->
-		<div
-			ref="scrollerEl"
-			class="grid-body recall-scroll min-h-0 flex-1 overflow-auto outline-none"
+		<!-- `RecycleScroller` is the scroller, so the keyboard, focus and ARIA
+		     wiring has to land on it rather than on a wrapper that never
+		     scrolls. Its width is the pane's width, which is what pins its
+		     scrollbar to the pane's right edge. -->
+		<RecycleScroller
+			ref="recycleRef"
+			class="grid-body recall-scroll min-h-0 flex-1 outline-none"
+			:style="{ '--grid-content-width': `${totalWidth}px` }"
+			:items="rows"
+			:key-field="rowKey"
+			:item-size="ROW_HEIGHT"
+			:buffer="240"
+			:skip-hover="true"
 			role="rowgroup"
 			:aria-rowcount="rows.length"
 			:aria-colcount="columns.length + 1"
@@ -886,14 +910,6 @@ function rowKey(_row: unknown, index: number): number {
 			@scroll="syncHeaderScroll"
 			@keydown="onKeydown"
 		>
-			<RecycleScroller
-				class="min-h-full"
-				:items="rows"
-				:key-field="rowKey"
-				:item-size="ROW_HEIGHT"
-				:buffer="240"
-				:skip-hover="true"
-			>
 				<template #default="{ item, index }">
 					<div class="grid-row flex" role="row" :style="rowStyle">
 						<div
@@ -948,7 +964,6 @@ function rowKey(_row: unknown, index: number): number {
 					</div>
 				</template>
 			</RecycleScroller>
-		</div>
 			<!-- One menu for every header. The headers live in a horizontal
 			     scroller over a virtualised body, so a per-cell menu would
 			     remount with it; this one is parked here, once, and anchored at
