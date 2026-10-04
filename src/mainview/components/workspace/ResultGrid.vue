@@ -107,9 +107,32 @@ const rows = computed(() => props.result.rows);
  * context row and the columns rendered here can never disagree.
  */
 const hiddenColumns = computed(() => props.hiddenColumns);
-const columns = computed(() =>
-	props.result.columns.filter((name) => !hiddenColumns.value.has(name)),
-);
+/**
+ * Column order the user has dragged into place, keyed by name — the same
+ * choice `columnWidths` makes, and for the same reason: hiding a different
+ * column must not renumber the one that was moved.
+ *
+ * Empty means "the result's own order". The overlay is a view concern rather
+ * than a rewrite of the statement, so it is discarded with the result it
+ * described instead of being carried into the next one.
+ */
+const columnOrder = ref<string[]>([]);
+
+const columns = computed(() => {
+	const visible = props.result.columns.filter(
+		(name) => !hiddenColumns.value.has(name),
+	);
+	const overlay = columnOrder.value;
+	if (overlay.length === 0) return visible;
+	// A name in the overlay can be hidden or absent from this result, and a
+	// name can be missing from it; both have to be reconciled or the rendered
+	// header and the row cells underneath it would disagree.
+	const live = new Set(visible);
+	const kept = overlay.filter((name) => live.has(name));
+	if (kept.length === 0) return visible;
+	const placed = new Set(kept);
+	return [...kept, ...visible.filter((name) => !placed.has(name))];
+});
 /** Result index of each rendered column, so selection survives hiding columns. */
 const columnIndexes = computed(() =>
 	columns.value.map((name) => props.result.columns.indexOf(name)),
@@ -354,6 +377,185 @@ function startColumnResize(event: PointerEvent, column: string): void {
 	window.addEventListener("pointerup", stopColumnResize, { once: true });
 }
 
+/**
+ * Reorder state. `drop` is the index the dragged column would take in the list
+ * *with itself removed*, which is what makes dropping it back on its own slot
+ * compare equal to `from` and therefore a no-op.
+ *
+ * `moved` is the threshold latch: a press that has not travelled a few pixels
+ * is a click, and a click on a header is a selection. Committing on
+ * `pointerdown` would turn every header click into a reorder.
+ */
+const REORDER_THRESHOLD_PX = 4;
+const columnDrag = ref<{
+	column: string;
+	from: number;
+	startX: number;
+	moved: boolean;
+	drop: number;
+} | null>(null);
+/** The header cell showing where the drop lands, and on which of its edges. */
+const dropMarker = ref<{ column: string; edge: "leading" | "trailing" } | null>(null);
+
+/**
+ * A drag that crossed the threshold still ends with a `click` when it is
+ * released over the cell it started on. Reordering and selecting are separate
+ * intentions, so that click is swallowed; the next press re-arms it.
+ */
+let headerClickSuppressed = false;
+
+/**
+ * Like the resize, a reorder has to keep tracking the pointer once it leaves
+ * the header, so the move and release handlers live on the window.
+ *
+ * No `preventDefault()` here, unlike the resize: the default action is what
+ * focuses a header cell, and the ContextMenu/Shift+F10 route reads its anchor
+ * from the focused cell. Stopping propagation is enough to keep the press out
+ * of the resize handle's way, which is the direction that actually needs it.
+ */
+function startColumnDrag(event: PointerEvent, column: string, index: number): void {
+	if (event.button !== 0 || columnDrag.value) return;
+	// The handle stops the `pointerdown` that reaches the cell, but that is an
+	// accident of listener order rather than a contract, so the handle is
+	// recognised by what was hit — the guard `onHeaderContextMenu` already uses
+	// for the same reason.
+	const target = event.target instanceof Element ? event.target : null;
+	if (target?.closest(".grid-column-resize")) return;
+	headerClickSuppressed = false;
+	columnDrag.value = { column, from: index, startX: event.clientX, moved: false, drop: index };
+	document.addEventListener("selectionchange", blockNativeSelection);
+	window.addEventListener("pointermove", onColumnDragMove);
+	window.addEventListener("pointerup", endColumnDrag, { once: true });
+	window.addEventListener("pointercancel", cancelColumnDrag, { once: true });
+	window.addEventListener("keydown", onColumnDragKeydown);
+}
+
+/**
+ * How many of the *other* columns the pointer has passed the midpoint of.
+ *
+ * Midpoint comparison is exact here rather than approximate: every header cell
+ * carries an explicit pixel width, so there is no guessed geometry to disagree
+ * with. Cells scrolled out of view still report a rect, which is what clamps the
+ * result to the ends of the list.
+ */
+function dropIndexFor(clientX: number, column: string): number {
+	const header = headerScrollEl.value;
+	if (!header) return 0;
+	const cells = header.querySelectorAll<HTMLElement>(".grid-header-cell[data-col]");
+	let index = 0;
+	for (const cell of cells) {
+		// The dragged column is lifted out of the count, so reaching the end of
+		// the list means crossing the midpoint of every other header.
+		if (columns.value[Number(cell.dataset.col)] === column) continue;
+		const rect = cell.getBoundingClientRect();
+		if (clientX < rect.left + rect.width / 2) break;
+		index += 1;
+	}
+	return index;
+}
+
+/**
+ * Where the indicator goes.
+ *
+ * A flex row has no gap to hang a rule in, so the rule sits on the edge of the
+ * column the drop displaces: the leading edge of the one about to be pushed
+ * aside, or the trailing edge of the last one when the drop is past the end.
+ * That index is derived from the rendered list, which still contains the dragged
+ * column in place, so a drop to the right of the source has to be read one slot
+ * further along.
+ */
+function updateDropMarker(column: string, from: number, drop: number): void {
+	// A drop onto its own slot moves nothing, so there is nowhere to land and
+	// no rule to draw; showing one would promise a move that will not happen.
+	if (drop === from) {
+		dropMarker.value = null;
+		return;
+	}
+	const list = columns.value;
+	const target = drop + (drop >= from ? 1 : 0);
+	if (target >= list.length) {
+		const last = list[list.length - 1];
+		// Dragging the last column further right has nowhere to go, and a rule on
+		// the column being dragged would promise a move that cannot happen.
+		dropMarker.value = last === undefined || last === column
+			? null
+			: { column: last, edge: "trailing" };
+		return;
+	}
+	const name = list[target];
+	dropMarker.value =
+		name === undefined || name === column ? null : { column: name, edge: "leading" };
+}
+
+function onColumnDragMove(event: PointerEvent): void {
+	const drag = columnDrag.value;
+	if (!drag) return;
+	const moved = drag.moved || Math.abs(event.clientX - drag.startX) >= REORDER_THRESHOLD_PX;
+	const drop = moved ? dropIndexFor(event.clientX, drag.column) : drag.drop;
+	columnDrag.value = { ...drag, moved, drop };
+	if (!moved) return;
+	headerClickSuppressed = true;
+	updateDropMarker(drag.column, drag.from, drop);
+}
+
+function endColumnDrag(): void {
+	const drag = columnDrag.value;
+	const drop = drag?.drop ?? 0;
+	stopColumnDrag();
+	if (!drag || !drag.moved) return;
+	reorderColumn(drag.from, drop);
+}
+
+/** Escape abandons the gesture; the order overlay is only written on a commit. */
+function onColumnDragKeydown(event: KeyboardEvent): void {
+	if (event.key !== "Escape" || !columnDrag.value) return;
+	cancelColumnDrag();
+}
+
+function cancelColumnDrag(): void {
+	stopColumnDrag();
+}
+
+function stopColumnDrag(): void {
+	columnDrag.value = null;
+	dropMarker.value = null;
+	document.removeEventListener("selectionchange", blockNativeSelection);
+	window.removeEventListener("pointermove", onColumnDragMove);
+	window.removeEventListener("pointerup", endColumnDrag);
+	window.removeEventListener("pointercancel", cancelColumnDrag);
+	window.removeEventListener("keydown", onColumnDragKeydown);
+}
+
+/**
+ * Where a visible column index ended up after one move. The selection is
+ * addressed by visible index, so without this a reorder would silently slide
+ * the highlight onto whichever column inherited the index the user had picked.
+ */
+function movedColumnIndex(index: number, from: number, to: number): number {
+	if (index === from) return to;
+	if (from < to && index > from && index <= to) return index - 1;
+	if (from > to && index >= to && index < from) return index + 1;
+	return index;
+}
+
+function reorderColumn(from: number, to: number): void {
+	const current = columns.value;
+	if (from < 0 || to < 0 || to >= current.length || from === to) return;
+	const next = [...current];
+	const [moved] = next.splice(from, 1);
+	if (moved === undefined) return;
+	next.splice(to, 0, moved);
+	columnOrder.value = next;
+	const anchor = selection.anchor.value;
+	const focus = selection.focus.value;
+	if (anchor) {
+		selection.anchor.value = { row: anchor.row, col: movedColumnIndex(anchor.col, from, to) };
+	}
+	if (focus) {
+		selection.focus.value = { row: focus.row, col: movedColumnIndex(focus.col, from, to) };
+	}
+}
+
 function onColumnResizeMove(event: PointerEvent): void {
 	const state = resizing.value;
 	if (!state) return;
@@ -583,9 +785,12 @@ function insideTextField(node: Node | null): boolean {
 }
 
 /** Collapses a native selection the drag made over grid text, and nothing else.
- *  Clearing a selection inside an input is what breaks select-all and paste. */
+ *  Clearing a selection inside an input is what breaks select-all and paste.
+ *
+ *  The header cells are `user-select: none`, but a reorder's pointer travels
+ *  down over the body on the way, and the cells there are selectable text. */
 function blockNativeSelection(): void {
-	if (!dragging.value) return;
+	if (!dragging.value && !columnDrag.value) return;
 	const active = document.getSelection();
 	if (!active || active.isCollapsed) return;
 	if (insideTextField(active.anchorNode) || insideTextField(active.focusNode)) return;
@@ -595,6 +800,7 @@ function blockNativeSelection(): void {
 onBeforeUnmount(() => {
 	stopCellDrag();
 	stopColumnResize();
+	stopColumnDrag();
 });
 
 function onRowNumberClick(row: number, event: MouseEvent): void {
@@ -615,8 +821,18 @@ function onRowNumberClick(row: number, event: MouseEvent): void {
  * moved to the header's context menu, because a click that re-runs the
  * statement is one the user cannot take back — choosing a column and ordering
  * the result are separate intentions and now have separate gestures.
+ *
+ * A drag that crossed the reorder threshold ends with a `click` on the cell it
+ * started from, and that click has to be discarded: the user asked to move the
+ * column, and re-selecting the one that moved out from under the pointer is
+ * not what they asked for. The flag is cleared on the next press, so a real
+ * click is never lost.
  */
 function onHeaderClick(col: number, event: MouseEvent): void {
+	if (headerClickSuppressed) {
+		headerClickSuppressed = false;
+		return;
+	}
 	const last = rows.value.length - 1;
 	if (last < 0) return;
 	if (event.shiftKey && selection.focus.value) {
@@ -716,6 +932,12 @@ watch(
 	() => {
 		selection.clear();
 		editing.value = null;
+		// The order overlay described the old result's columns. Carrying it over
+		// would apply a drag the user made to a shape that no longer exists, and
+		// the reconciliation in `columns` would quietly append the new columns to
+		// the end of an order they were never part of.
+		columnOrder.value = [];
+		stopColumnDrag();
 	},
 );
 
@@ -869,6 +1091,9 @@ function rowKey(_row: unknown, index: number): number {
 					v-for="(column, columnIndex) in columns"
 					:key="column"
 					class="grid-header-cell"
+					:class="{
+						'opacity-60': columnDrag?.moved === true && columnDrag?.column === column,
+					}"
 					role="columnheader"
 					:style="cellStyleFor(column)"
 					:title="column"
@@ -876,7 +1101,9 @@ function rowKey(_row: unknown, index: number): number {
 					tabindex="0"
 					:aria-haspopup="sortable ? 'menu' : undefined"
 					:data-selected="columnIsSelected(columnIndex)"
+					:data-col="columnIndex"
 					@click="onHeaderClick(columnIndex, $event)"
+					@pointerdown="startColumnDrag($event, column, columnIndex)"
 					@contextmenu="onHeaderContextMenu(column, $event)"
 					@keydown="onHeaderKeydown(column, $event)"
 				>
@@ -890,6 +1117,16 @@ function rowKey(_row: unknown, index: number): number {
 						v-else-if="sortIcon(column) === 'desc'"
 						class="size-3 shrink-0 text-primary"
 						aria-hidden="true"
+					/>
+					<!-- Where the drop lands. The header is a flex row with no gap
+					     to draw in, so the rule rides the edge of the column the
+					     drop displaces; it is decorative and must never take the
+					     press that drives the gesture. -->
+					<span
+						v-if="dropMarker?.column === column"
+						aria-hidden="true"
+						class="pointer-events-none absolute inset-y-0 w-0.5 bg-primary"
+						:class="dropMarker?.edge === 'trailing' ? 'right-0' : 'left-0'"
 					/>
 					<!-- The handle sits on the column's trailing edge; a
 					     double-click on it restores the shared default. -->

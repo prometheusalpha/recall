@@ -27,6 +27,7 @@ import { useBookmarksStore } from "../../stores/bookmarks";
 import { useSqlFilesStore } from "../../stores/sqlFiles";
 import { useTheme } from "../../composables/useTheme";
 import { splitSqlStatements } from "../../lib/sqlSplit";
+import { statementAt } from "../../lib/statementAt";
 import { errorMessage, rpc, RPC_TIMEOUTS } from "../../lib/rpc";
 import type { ConnectionConfig, DatabaseType } from "../../../shared/types";
 import type * as CmView from "@codemirror/view";
@@ -306,12 +307,24 @@ function toggleRun(): void {
 }
 
 /**
- * `Mod-Enter` with something selected runs just the selection.
+ * `Mod-Enter`, in descending order of how much the user narrowed the run:
+ * a run in flight, then the selection, then the statement under the caret,
+ * then the whole document.
  *
  * A selection is how a user says "these two statements, not the whole file",
  * and running the rest of the document alongside it is how a DDL batch turns
- * into an accident. A whitespace-only selection counts as no selection, and
- * a run in flight always wins: the chord is a toggle first, and stopping a
+ * into an accident — so a selection beats everything below it, even one that
+ * spans two statements. A whitespace-only selection counts as no selection.
+ *
+ * With nothing selected, the caret itself is the pointer. DataGrip's rule is
+ * the one worth copying: put the cursor inside a statement and run only that
+ * statement, because "run the file" from the middle of one query is almost
+ * never what the user meant. The caret in the blank line between two
+ * statements belongs to neither, and that is the honest answer — the run
+ * falls through to the whole document, which is what the user had before the
+ * outline existed and is still what the toolbar button does.
+ *
+ * A run in flight always wins: the chord is a toggle first, and stopping a
  * query the user is watching is never what they meant to replace.
  */
 function runSelection(): void {
@@ -322,11 +335,18 @@ function runSelection(): void {
 	const id = activeTabId.value;
 	if (!id) return;
 	const selected = editor?.selection().trim() ?? "";
-	if (selected.length === 0) {
-		toggleRun();
+	if (selected.length > 0) {
+		void queryStore.run(id, { sqlOverride: selected });
 		return;
 	}
-	void queryStore.run(id, { sqlOverride: selected });
+	// Already trimmed by the splitter and still carrying its `;`, which is
+	// what the backend's own splitter expects to receive.
+	const statement = editor?.statementUnderCaret() ?? null;
+	if (statement !== null) {
+		void queryStore.run(id, { sqlOverride: statement });
+		return;
+	}
+	toggleRun();
 }
 
 /* -------------------------------------------------------------------------
@@ -695,6 +715,14 @@ interface EditorHandle {
 	 * selection itself: the `EditorView` never escapes it.
 	 */
 	selection(): string;
+	/**
+	 * The text of the statement the caret is inside, or `null` when the caret
+	 * is in none — the blank space between two statements, or an empty
+	 * document. Read from the caret's head rather than the selection: a
+	 * selection is an instruction to run a range, an outline is not, and the
+	 * two disagree the moment a selection spans a statement boundary.
+	 */
+	statementUnderCaret(): string | null;
 	/** Redraws the bookmark gutter after the store changed. */
 	refreshBookmarks(): void;
 	/** Tears the view down; its element goes away with the component. */
@@ -802,6 +830,74 @@ async function mountEditor(): Promise<void> {
 			}),
 	});
 
+	/**
+	 * Builds the box for the statement under the caret: a translucent fill over
+	 * the statement's text, plus a rule along the top of its first line and
+	 * along the bottom of its last one. Without the two rules a multi-line
+	 * statement reads as one loose paragraph of tint and the file stops looking
+	 * like a stack of separately runnable statements; a statement that fits on
+	 * one line needs both rules at once, hence its own class.
+	 */
+	function outlineStatement(state: CmState.EditorState): CmView.DecorationSet {
+		const statement = statementAt(
+			state.doc.toString(),
+			state.selection.main.head,
+		);
+		if (!statement) return V.Decoration.none;
+		const doc = state.doc;
+		const first = doc.lineAt(statement.start);
+		// `end` sits just past the statement's last character, so the line the
+		// statement ends on is the one holding `end - 1`.
+		const last = doc.lineAt(statement.end - 1);
+		const single = first.number === last.number;
+		const ranges: CmState.Range<CmView.Decoration>[] = [
+			V.Decoration.mark({ class: "cm-statement-range" }).range(
+				statement.start,
+				statement.end,
+			),
+			V.Decoration.line({
+				class: single
+					? "cm-statement-line cm-statement-line--solo"
+					: "cm-statement-line cm-statement-line--first",
+			}).range(first.from),
+		];
+		if (!single) {
+			ranges.push(
+				V.Decoration.line({
+					class: "cm-statement-line cm-statement-line--last",
+				}).range(last.from),
+			);
+		}
+		return V.Decoration.set(ranges, true);
+	}
+
+	/**
+	 * The statement the caret is inside, outlined.
+	 *
+	 * Recomputed from the caret's *head* rather than the whole selection
+	 * range: the outline answers "what would `Mod-Enter` run right now", and a
+	 * selection spanning two statements has no single answer — the run would
+	 * be the selection, not either statement. Outlining the head keeps the box
+	 * and the chord telling the same story, which is the only way a user can
+	 * trust either of them.
+	 *
+	 * A tab swap is a document replacement that happens to keep its own
+	 * transaction shape, so `setDocTab` is watched alongside `docChanged`:
+	 * without it the previous tab's outline would stay on screen over the new
+	 * document until the next keystroke.
+	 */
+	const statementOutline = S.StateField.define<CmView.DecorationSet>({
+		create: (state) => outlineStatement(state),
+		update: (deco, transaction) => {
+			const changed =
+				transaction.docChanged ||
+				transaction.selection ||
+				transaction.effects.some((effect) => effect.is(setDocTab));
+			return changed ? outlineStatement(transaction.state) : deco;
+		},
+		provide: (field) => V.EditorView.decorations.from(field),
+	});
+
 	const languageCompartment = new S.Compartment();
 	const readOnlyCompartment = new S.Compartment();
 	/**
@@ -817,7 +913,14 @@ async function mountEditor(): Promise<void> {
 		V.EditorView.editable.of(!locked),
 	];
 
-	// Colours come from the token palette globals.css already defines.
+	// Colours come from the token palette globals.css already defines. The
+	// outline's two rules are spelled out here rather than inlined at each
+	// selector because the single-line case needs both in one declaration and
+	// three copies of the same `color-mix` is where the themes would drift.
+	const outlineTop =
+		"inset 0 1px 0 color-mix(in srgb, var(--primary) 45%, transparent)";
+	const outlineBottom =
+		"inset 0 -1px 0 color-mix(in srgb, var(--primary) 45%, transparent)";
 	const editorTheme = (dark: boolean) =>
 		V.EditorView.theme(
 			{
@@ -845,6 +948,20 @@ async function mountEditor(): Promise<void> {
 				".cm-activeLineGutter": {
 					backgroundColor:
 						"color-mix(in srgb, var(--accent) 40%, transparent)",
+				},
+				// The statement outline. A fill strong enough to find at a
+				// glance would fight the selection and the active-line tint it
+				// sits on top of, so it stays a hint and the two rules carry the
+				// read. `--primary` is near-black in light and near-white in
+				// dark, so the same mix reads on both without a second token.
+				".cm-statement-range": {
+					backgroundColor:
+						"color-mix(in srgb, var(--primary) 7%, transparent)",
+				},
+				".cm-statement-line--first": { boxShadow: outlineTop },
+				".cm-statement-line--last": { boxShadow: outlineBottom },
+				".cm-statement-line--solo": {
+					boxShadow: `${outlineTop}, ${outlineBottom}`,
 				},
 				".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
 					backgroundColor:
@@ -890,6 +1007,7 @@ async function mountEditor(): Promise<void> {
 				highlight,
 				V.lineNumbers(),
 				bookmarkGutter,
+				statementOutline,
 				// Assigning is a DOM event, registered ahead of the keymap:
 				// preventing the default is what stops `Ctrl-Shift-a` from also
 				// jumping to `a`.
@@ -1003,6 +1121,17 @@ async function mountEditor(): Promise<void> {
 			// reads as "run the whole document".
 			const main = editorView.state.selection.main;
 			return main.empty ? "" : editorView.state.sliceDoc(main.from, main.to);
+		},
+		statementUnderCaret() {
+			// The same answer the outline is drawn from, so the box on screen and
+			// the text `Mod-Enter` hands the backend cannot drift apart.
+			const state = editorView.state;
+			return (
+				statementAt(
+					state.doc.toString(),
+					state.selection.main.head,
+				)?.sql ?? null
+			);
 		},
 		refreshBookmarks() {
 			editorView.dispatch({ effects: redrawBookmarks.of(null) });

@@ -195,6 +195,25 @@ body.panel-resizing * {
 	cursor: row-resize;
 }
 
+/* A drag across the divider must not become a drag across the text. The
+   `mousedown` in QueryWorkspace.vue cancels the selection before it starts;
+   this is the backstop for a pointer that never lands a `mousedown` on the
+   splitter, where splitpanes' own `splitpanes--dragging` rule is not enough.
+   It is not: it lands only after the first `mousemove`, so the selection has
+   already started, and an inherited `user-select: none` is not binding on a
+   contenteditable subtree — which CodeMirror's editor is. Stating it on the
+   editor subtree directly, for the horizontal split's panes only, is what
+   actually holds. No `!important` is needed: nothing else sets `user-select`
+   on these elements, and this selector outranks the theme rules either way.
+   The rule is scoped by orientation rather than applied to `.splitpanes--dragging`
+   wholesale so the vertical splitter keeps its own behaviour. */
+.splitpanes--horizontal.splitpanes--dragging > .splitpanes__pane .cm-editor,
+.splitpanes--horizontal.splitpanes--dragging > .splitpanes__pane .cm-content,
+.splitpanes--horizontal.splitpanes--dragging > .splitpanes__pane .cm-editor * {
+	user-select: none;
+	-webkit-user-select: none;
+}
+
 /* The editor/result divider. The splitter's own top border is one hairline
   inside a gap, which reads as almost nothing at the panel's rounded edges;
   the rule below is drawn on the editor pane itself so the two halves are

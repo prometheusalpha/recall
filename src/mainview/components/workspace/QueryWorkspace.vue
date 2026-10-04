@@ -7,7 +7,7 @@
  * A table tab has no editor, so it collapses the split and gives the whole pane
  * to the grid.
  */
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Pane, Splitpanes } from "splitpanes";
 import type { SplitpanesResizedPayload } from "splitpanes";
 import "splitpanes/dist/splitpanes.css";
@@ -70,6 +70,44 @@ function onResized(payload: SplitpanesResizedPayload): void {
 		// Nothing to persist to; the layout still tracks live drags.
 	}
 }
+
+/**
+ * A drag on the editor/results divider used to leave a painted text selection
+ * behind in the editor. The browser starts a selection on `mousedown`, and
+ * `splitpanes` only calls `removeAllRanges()` on the first `mousemove` — which
+ * empties the ranges but not the drag anchor, so every later move extends the
+ * selection again. The `user-select: none` it puts on `.splitpanes__pane`
+ * cannot stop that either: it arrives one move too late, and an inherited
+ * `none` is not binding on a contenteditable subtree, which is exactly what
+ * CodeMirror is. CodeMirror then adopts whatever range the pointer swept and
+ * repaints it, which is why clearing the selection mid-drag did nothing.
+ *
+ * Cancelling `mousedown` is the fix, because it stops the selection from ever
+ * starting. Propagation is deliberately left alone: `preventDefault` suppresses
+ * the default action only, so `splitpanes`' own `mousedown` handler still runs
+ * and the divider still resizes. No `removeAllRanges()` on drag end — there is
+ * then no selection of ours to clear, and `splitpanes` clears its own on
+ * mouseup regardless.
+ */
+function onSplitterMouseDown(event: MouseEvent): void {
+	const target = event.target;
+	if (!(target instanceof Element)) return;
+	if (target.closest(".splitpanes__splitter") === null) return;
+	event.preventDefault();
+}
+
+/**
+ * Capture phase, so the default action is cancelled before the splitter's own
+ * handler gets a say. Removed with the component: a listener that outlived the
+ * workspace would keep cancelling `mousedown` on a divider it no longer owns.
+ */
+onMounted(() => {
+	window.addEventListener("mousedown", onSplitterMouseDown, true);
+});
+
+onBeforeUnmount(() => {
+	window.removeEventListener("mousedown", onSplitterMouseDown, true);
+});
 
 const tabsStore = useTabsStore();
 const queryStore = useQueryStore();
