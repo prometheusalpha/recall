@@ -486,9 +486,30 @@ function columnIsSelected(col: number): boolean {
 	return selection.isSelected(0, col);
 }
 
+/**
+ * Whether the gutter cell for this row is painted as selected.
+ *
+ * Only when the rectangle genuinely covers the row end to end. Testing the
+ * last column instead — which is what this did — made a click on any single
+ * cell there light the whole gutter, so one selected cell in the rightmost
+ * column read as "the whole row is selected". The gutter is the row's own
+ * affordance, so it may only claim a selection that includes every cell.
+ *
+ * This still lights for everything that really does select whole rows: the
+ * gutter click and its shift-click both run to column 0 and back to the last
+ * one, and select-all spans the full rectangle.
+ */
 function rowIsSelected(row: number): boolean {
 	const last = columns.value.length - 1;
-	return columns.value.length > 0 && selection.isSelected(row, last);
+	if (last < 0) return false;
+	const range = selection.range.value;
+	if (!range) return false;
+	return (
+		range.startCol === 0 &&
+		range.endCol === last &&
+		row >= range.startRow &&
+		row <= range.endRow
+	);
 }
 
 /**

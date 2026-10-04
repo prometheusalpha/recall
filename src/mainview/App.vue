@@ -26,6 +26,21 @@ import { useConnectionsStore } from "./stores/connections";
 import { useBookmarksStore } from "./stores/bookmarks";
 
 const tabs = useTabsStore();
+// Bookmarks are hydrated once, here: the editor's gutter and the window-level
+// `Mod-<character>` jump both read this one store, and the backend is the only
+// side that knows the mapping.
+const bookmarks = useBookmarksStore();
+
+/** The 36 characters a mnemonic can be; one slot each, no more. */
+const MNEMONICS = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+/**
+ * CodeMirror's `Mod` is Cmd on macOS and Ctrl everywhere else. The binding
+ * this handler replaces was spelled in `Mod`, so the same platform test decides
+ * which key means "jump" here.
+ */
+const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+
 const { theme, toggle } = useTheme();
 
 const { toast } = useToast();
@@ -35,9 +50,9 @@ const { toast } = useToast();
 // store, and the tree holds its empty state back until it finishes.
 void useConnectionsStore().hydrate();
 
-// Bookmarks come from the same backend-owned database as the profiles, and the
-// editor's gutter cannot draw them until the list arrives.
-void useBookmarksStore().load();
+// The bookmark list is backend-owned, so the jump handler and the editor's
+// gutter both wait on the same load before they can know a mnemonic.
+void bookmarks.load();
 
 const connectionDialogOpen = ref(false);
 /** Profile being edited, or null when the dialog is creating a new one. */
@@ -65,6 +80,36 @@ function onQuickOpenKeydown(event: KeyboardEvent): void {
 	event.preventDefault();
 	quickOpen.open.value = !quickOpen.open.value;
 }
+
+// Mnemonic jump for the whole window, following `onQuickOpenKeydown` above: a
+// jump must work from anywhere in the app, and a CodeMirror keymap only ever
+// sees a key while the editor itself holds focus — which is false when no query
+// tab is open, when the active tab is a table tab, and when focus sits in the
+// sidebar, the files panel or the result grid. So the shortcut lives here and
+// asks the store to open whatever the character names.
+//
+// Only a character a bookmark is actually bound to is taken. An unbound one is
+// left to the webview, `preventDefault` and all, because `Cmd-c`, `Cmd-v` and
+// the rest have to keep working and a mnemonic set has no say over keys it does
+// not own.
+function onBookmarkJumpKeydown(event: KeyboardEvent): void {
+	// `Alt` is not part of this chord, and a held key is one jump, not a stream.
+	if (event.altKey || event.repeat) return;
+	// Exactly the one accel key CodeMirror's `Mod` would have meant: Cmd on
+	// macOS, Ctrl everywhere else, never both.
+	const accel = IS_MAC ? event.metaKey : event.ctrlKey;
+	if (!accel || (IS_MAC ? event.ctrlKey : event.metaKey)) return;
+	// `Shift` is allowed either way — an uppercase letter names a mnemonic just
+	// as well as a lowercase one does, so `key` is read as typed and lowered.
+	const mnemonic = event.key.toLowerCase();
+	if (mnemonic.length !== 1 || !MNEMONICS.includes(mnemonic)) return;
+	if (!bookmarks.byMnemonic.has(mnemonic)) return;
+	// Something closer to the key already spoke for it; a jump is not it.
+	if (event.defaultPrevented) return;
+	event.preventDefault();
+	void bookmarks.jump(mnemonic);
+}
+
 const sidebarHidden = ref(false);
 
 /** Mirrored from the panels' own resize handles; drives nothing but layout. */
@@ -89,12 +134,14 @@ onMounted(() => {
 	rpc.addMessageListener("connectionLost", onConnectionLost);
 	window.addEventListener("beforeunload", handleBeforeUnload);
 	window.addEventListener("keydown", onQuickOpenKeydown);
+	window.addEventListener("keydown", onBookmarkJumpKeydown);
 });
 
 onBeforeUnmount(() => {
 	rpc.removeMessageListener("connectionLost", onConnectionLost);
 	window.removeEventListener("beforeunload", handleBeforeUnload);
 	window.removeEventListener("keydown", onQuickOpenKeydown);
+	window.removeEventListener("keydown", onBookmarkJumpKeydown);
 });
 </script>
 

@@ -207,15 +207,14 @@ function cancelAssign(): boolean {
 	return true;
 }
 
-function jumpTo(mnemonic: string): boolean {
-	void bookmarksStore.jump(mnemonic);
-	return true;
-}
-
 /**
- * The keymap bookmarks need. Jumping is `Ctrl-<character>`; assigning is
- * `Ctrl-Shift-<character>` (handled as a DOM event below) or `Ctrl-F11`
- * followed by one of the 36 characters.
+ * The keymap bookmarks need. Jumping is not here: `Ctrl-<character>` is
+ * handled on the window, because a CodeMirror keymap only sees keys while the
+ * editor holds focus, and a jump is exactly the shortcut that has to work
+ * from the sidebar, the files panel or with no query tab open at all. What
+ * stays is assigning — `Ctrl-Shift-<character>` (handled as a DOM event
+ * below) or `Ctrl-F11` followed by one of the 36 characters — because that
+ * one needs the caret, and therefore the editor.
  */
 function bookmarkBindings(): CmView.KeyBinding[] {
 	const bindings: CmView.KeyBinding[] = [
@@ -223,7 +222,6 @@ function bookmarkBindings(): CmView.KeyBinding[] {
 		{ key: "Escape", run: () => cancelAssign() },
 	];
 	for (const mnemonic of MNEMONICS) {
-		bindings.push({ key: `Ctrl-${mnemonic}`, run: () => jumpTo(mnemonic) });
 		bindings.push({ key: mnemonic, run: () => assignMnemonic(mnemonic) });
 	}
 	return bindings;
@@ -250,7 +248,8 @@ function mnemonicForShiftKey(event: KeyboardEvent): string | null {
  * This is a DOM handler rather than a keymap entry because CodeMirror derives a
  * printable key's case from Shift instead of recording it as a modifier, which
  * leaves no way to spell `Ctrl-Shift-1` as a key name. Preventing the default
- * is what keeps the keymap below from also treating the press as a jump.
+ * is what keeps the window-level jump handler — which replaced this keymap's
+ * own `Mod-<character>` entries — from also reading the press as a jump.
  */
 function assignFromShortcut(event: KeyboardEvent): boolean {
 	const mnemonic = mnemonicForShiftKey(event);
@@ -1020,6 +1019,19 @@ async function mountEditor(): Promise<void> {
 			effects: setDocTab.of({ tabId: initialTab.id, sql: initialTab.sql }),
 			annotations: [externalSwap.of(true)],
 		});
+		// A watcher never fires for a value that was already there when the
+		// component mounted, and a jump from outside the editor is exactly
+		// that: the window handler ran while no query tab was open, opened
+		// this one, and left a pending jump naming it. The document is
+		// installed by hand just above, so the caret has to be placed by hand
+		// too — otherwise the right tab appears and the line does not. A jump
+		// naming some other tab is left alone; the watcher further down picks
+		// it up when that tab activates.
+		const jump = bookmarksStore.pendingJump;
+		if (jump?.tabId === initialTab.id) {
+			editor.goToLine(jump.line);
+			bookmarksStore.pendingJump = null;
+		}
 		editorView.focus();
 	}
 }

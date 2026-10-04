@@ -32,13 +32,16 @@ Phase 5:
 - Icon của connection hiển thị loại db (Icon của mysql / postgres)
 
 Phase 6:
-- Keyboard shortcuts mechanism / settings, nhất là close others
-- Fix row number sang bên trái khi scroll
-- Mnemonic có thể nhảy khi k mở file
+- [x] Mnemonic bookmark có thể nhảy vào khi k mở file chứa cái mnemonic đó
+- [x] Pin row number ở bên trái khi scroll ngang
+- [x] Bug khi select cell cột cuối thì row number cell highlight lên
+- [x] Border ngăn cách editor và result ở màn sql chưa rõ ràng, và cần thêm khả năng kéo resize
+
+Phase 7:
 - Paging ở màn table result grid
-- Bug khi select cell cột cuối thì row index highlight lên
-- Border ngăn cách editor và result ở màn sql chưa rõ ràng, và cần thêm khả năng kéo resize
+- Keyboard shortcuts mechanism / settings, nhất là close others
 
 Sau:
 - Kéo thả vị trí cột
 - Gợi ý cột ở where và order by
+- Redis support

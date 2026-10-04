@@ -153,7 +153,7 @@ body.panel-resizing * {
 }
 
 /* ---------------------------------------------------------------------------
- * Splitpanes splitters — restyled to a 3px hairline, matching dbx.
+ * Splitpanes splitters — a hairline divider with a wider, grabbable band.
  * ------------------------------------------------------------------------ */
 .splitpanes--vertical > .splitpanes__pane {
 	border-radius: 0;
@@ -164,31 +164,51 @@ body.panel-resizing * {
 	border: none !important;
 	border-right: 1px solid var(--border) !important;
 	position: relative;
-	width: 3px !important;
+	/* The 3px belongs to the *vertical* splitter only, and is scoped there
+	 * below. Stating it here squashed the horizontal divider to a 3x6 dot at
+	 * the pane's left edge: a drag target nobody can aim at, which is why the
+	 * split looked unresizable. */
+	user-select: none;
+	-webkit-user-select: none;
 }
 
+/* Only the vertical splitter is a 3px column. */
+.splitpanes--vertical > .splitpanes__splitter {
+	width: 3px !important;
+	cursor: col-resize;
+}
+
+/* The horizontal splitter is the editor/results divider, and it is a band
+   across the whole pane: its hit area is wider than the line it draws, so the
+   drag is reachable without the divider growing into a bar. The visible edge
+   below belongs to the pane, and this band is only the grip. */
 .splitpanes--horizontal > .splitpanes__splitter {
 	border-right: none !important;
-	border-top: 1px solid var(--border) !important;
-	height: 3px !important;
+	/* In a column flex container the splitter stretches to the pane's width on
+	   its own; saying so keeps it that way whatever the flex defaults do. */
+	width: 100% !important;
+	/* Fixed-height band in a column flex container: without this the panes
+	   squeeze it, and a divider whose hit area depends on the split ratio is a
+	   divider that cannot be aimed at. */
+	flex-shrink: 0;
+	height: 6px !important;
 	cursor: row-resize;
 }
 
 /* The editor/result divider. The splitter's own top border is one hairline
-   inside a 3px gap, which reads as almost nothing at the panel's rounded
-   edges; the rule below is drawn on the editor pane itself so the two halves
-   are always separated by a visible line, splitter drag state or not. */
+  inside a gap, which reads as almost nothing at the panel's rounded edges;
+  the rule below is drawn on the editor pane itself so the two halves are
+  always separated by a visible line, splitter drag state or not. It is
+  `--ring` rather than `--border` because the border token is translucent in
+  dark mode, and a divider that disappears in one theme is not a divider. */
 /* `:has(+ .splitpanes__pane)` rather than `:first-child`: the table-tab layout
-   is a single pane, and there is no result set under an editor to separate. */
+  is a single pane, and there is no result set under an editor to separate. */
 .splitpanes--horizontal > .splitpanes__pane:has(+ .splitpanes__pane) {
-	border-bottom: 1px solid var(--border);
+	border-bottom: 1px solid var(--ring);
 }
 
-/* The splitter's own border would double that line. */
-.splitpanes--horizontal > .splitpanes__splitter {
-	border-top: none !important;
-}
-
+/* Hover tint for the whole band. It sits under the grip (`::before` carries a
+   z-index) so the grip never washes out at the moment the user is aiming. */
 .splitpanes__splitter::after {
 	content: "";
 	position: absolute;
@@ -197,7 +217,29 @@ body.panel-resizing * {
 }
 
 .splitpanes__splitter:hover::after {
-	background: color-mix(in srgb, var(--ring) 40%, transparent);
+	background: color-mix(in srgb, var(--ring) 55%, transparent);
+}
+
+/* The grab affordance: a short centred bar, dim at rest so it reads as part
+   of the divider rather than as a control, and at full foreground on hover so
+   it says "this moves" at the moment the pointer arrives. Horizontal only —
+   the vertical splitter keeps its bare hairline. */
+.splitpanes--horizontal > .splitpanes__splitter::before {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	z-index: 1;
+	width: 28px;
+	height: 2px;
+	transform: translate(-50%, -50%);
+	border-radius: 1px;
+	background-color: color-mix(in srgb, var(--ring) 75%, transparent);
+	transition: background-color 120ms ease;
+}
+
+.splitpanes--horizontal > .splitpanes__splitter:hover::before {
+	background-color: var(--foreground);
 }
 
 /* ---------------------------------------------------------------------------
@@ -349,6 +391,43 @@ body.panel-resizing * {
 	/* The gutter is reference, not content, so it sits a step below the values. */
 	font-size: 11px;
 	line-height: 1.15;
+}
+
+/**
+ * The pinned gutter.
+ *
+ * The row-number column stays at the left edge while the columns travel under
+ * it. Sticky rather than a second, separate column because each row is one
+ * flex line at the full content width: `left: 0` resolves against the
+ * scroller's scrollport, and the only thing that would stop the sticky cell
+ * from seeing that scrollport — an ancestor with its own `overflow` — is
+ * already forced to `overflow: visible` further down this file.
+ *
+ * No background is set here. Both candidates this cell would otherwise inherit
+ * are already opaque (`--chrome` on the body, `--grid-header` on the header),
+ * and forcing one of them onto the header cell would put a faint seam down the
+ * gutter. The one translucent case — row hover — is re-mixed against the fill
+ * next to the hover rule instead.
+ *
+ * The compound selectors are what make this beat `.grid-header-cell`, which
+ * sets `position: relative` and would otherwise pin the header gutter for
+ * good.
+ */
+.grid-cell.grid-row-number,
+.grid-header-cell.grid-row-number {
+	position: sticky;
+	left: 0;
+	/* Above every other positioned thing in the grid: the sibling cells are all
+	   z-index: auto, and `.grid-column-resize` sits at 2, which would otherwise
+	   float a resize handle — and its hover line — on top of the pinned gutter
+	   as the column it belongs to travels underneath. */
+	z-index: 3;
+	/* `--border` is a 60% mix on body cells and a translucent token in dark
+	   mode; derived from `--foreground` the divider is a real edge in both
+	   themes. Both cells already carried this 1px border, so under Tailwind's
+	   border-box sizing it already sits outside the text's 56px — recolouring
+	   it cannot move the numbers. */
+	border-right: 1px solid color-mix(in srgb, var(--foreground) 24%, transparent);
 }
 
 /**
@@ -546,6 +625,14 @@ overflow: hidden;
    disappears the moment the pointer crosses the range. */
 .grid-row:hover .grid-cell:not([data-selected="true"]) {
 	background: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* The pinned gutter cannot take the translucent hover fill above: it now sits
+   on top of the cells passing under it, and a see-through fill there would
+   show the row's own values sliding by. Mixing the accent against the gutter's
+   own opaque fill keeps the hover tint and the coverage at once. */
+.grid-row:hover .grid-cell.grid-row-number:not([data-selected="true"]) {
+	background: color-mix(in srgb, var(--accent) 50%, var(--chrome));
 }
 
 /* The resize handle occupies the last few pixels of a header cell, so it reads
