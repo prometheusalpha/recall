@@ -8,6 +8,8 @@ import AppToolbar from "./components/layout/AppToolbar.vue";
 import ToastHost from "./components/layout/ToastHost.vue";
 import SnippetsSettings from "./components/editor/SnippetsSettings.vue";
 import QuickOpenDialog from "./components/quickopen/QuickOpenDialog.vue";
+import KeyboardShortcutsSettings from "./components/layout/KeyboardShortcutsSettings.vue";
+import TabCloseDialog from "./components/workspace/TabCloseDialog.vue";
 import { useQuickOpen } from "./composables/useQuickOpen";
 import { Button } from "./components/ui/button";
 import {
@@ -20,10 +22,12 @@ import {
 } from "./components/ui/dialog";
 import { useTheme } from "./composables/useTheme";
 import { useToast } from "./composables/useToast";
-import { rpc } from "./lib/rpc";
+import { errorMessage, rpc } from "./lib/rpc";
 import { useTabsStore } from "./stores/tabs";
 import { useConnectionsStore } from "./stores/connections";
 import { useBookmarksStore } from "./stores/bookmarks";
+import { useTabClose } from "./composables/useTabClose";
+import { registerCommand, runCommand, useShortcuts } from "./composables/useShortcuts";
 
 const tabs = useTabsStore();
 // Bookmarks are hydrated once, here: the editor's gutter and the window-level
@@ -48,7 +52,8 @@ const { toast } = useToast();
 // Profiles live in the Bun process's SQLite file, so the sidebar's list only
 // exists once the backend answers. Hydrating here covers every consumer of the
 // store, and the tree holds its empty state back until it finishes.
-void useConnectionsStore().hydrate();
+const connections = useConnectionsStore();
+void connections.hydrate();
 
 // The bookmark list is backend-owned, so the jump handler and the editor's
 // gutter both wait on the same load before they can know a mnemonic.
@@ -71,17 +76,77 @@ function openEditConnection(connectionId: string): void {
 
 const settingsOpen = ref(false);
 const snippetsOpen = ref(false);
+const shortcutsOpen = ref(false);
 const quickOpen = useQuickOpen();
+const tabClose = useTabClose();
+const { match } = useShortcuts();
 
-function onQuickOpenKeydown(event: KeyboardEvent): void {
-	// Cmd/Ctrl+P is the print shortcut in every browser context, so the
-	// palette takes it and the webview never sees the key.
-	if (event.key !== "p" || !(event.metaKey || event.ctrlKey) || event.altKey) return;
-	event.preventDefault();
-	quickOpen.open.value = !quickOpen.open.value;
+function openShortcutSettings(): void {
+	settingsOpen.value = false;
+	shortcutsOpen.value = true;
 }
 
-// Mnemonic jump for the whole window, following `onQuickOpenKeydown` above: a
+/**
+ * The strip renders pinned tabs first, then the rest, with a separator
+ * between — so "next tab" has to walk that same order or it jumps somewhere
+ * the user cannot see.
+ */
+function visibleTabOrder() {
+	const all = tabs.tabs;
+	return [...all.filter((tab) => tab.pinned), ...all.filter((tab) => !tab.pinned)];
+}
+
+function stepTab(direction: 1 | -1): void {
+	const order = visibleTabOrder();
+	if (order.length < 2) return;
+	const current = order.findIndex((tab) => tab.id === tabs.activeTabId);
+	if (current === -1) {
+		tabs.activate(order[0].id);
+		return;
+	}
+	// Wraps at both ends: there is no first or last tab, only the ring.
+	tabs.activate(order[(current + direction + order.length) % order.length].id);
+}
+
+/**
+ * One window listener for every rebindable command, replacing the bespoke
+ * quick-open handler. It claims the key with `preventDefault` so
+ * `onBookmarkJumpKeydown` — which bails on a `defaultPrevented` event —
+ * cannot also act on the same press.
+ */
+function onShortcutKeydown(event: KeyboardEvent): void {
+	// A held key is one action, not a stream of them.
+	if (event.repeat) return;
+	const id = match(event);
+	if (id === null) return;
+	event.preventDefault();
+	runCommand(id);
+}
+
+function registerShortcutCommands(): void {
+	registerCommand("tab.close", () => {
+		if (tabs.activeTabId === null) return;
+		tabClose.requestClose(tabs.activeTabId);
+	});
+	registerCommand("tab.closeOthers", () => {
+		// The active tab is already the survivor; activating it again would
+		// only be a no-op hiding a real bug.
+		if (tabs.activeTabId === null) return;
+		tabClose.requestCloseOthers(tabs.activeTabId);
+	});
+	registerCommand("tab.closeAll", () => {
+		tabClose.requestCloseAll();
+	});
+	registerCommand("tab.next", () => stepTab(1));
+	registerCommand("tab.prev", () => stepTab(-1));
+	// Cmd/Ctrl+P is the print shortcut in every browser context, so the
+	// palette takes it and the webview never sees the key.
+	registerCommand("quickOpen.toggle", () => {
+		quickOpen.open.value = !quickOpen.open.value;
+	});
+}
+
+// Mnemonic jump for the whole window, following the window dispatcher above: a
 // jump must work from anywhere in the app, and a CodeMirror keymap only ever
 // sees a key while the editor itself holds focus — which is false when no query
 // tab is open, when the active tab is a table tab, and when focus sits in the
@@ -125,7 +190,17 @@ function openSnippetsSettings(): void {
 
 /** The backend is the only side that can see a socket die on its own. */
 function onConnectionLost(payload: { connectionId: string; reason: string }): void {
-	toast(`Connection lost: ${payload.reason}`);
+	connections.markLost(payload.connectionId);
+	// Sticky, not the 4s default: the only way back is the button, and a toast
+	// that times out turns a recoverable drop into a dead tab.
+	toast(`Connection lost: ${payload.reason}`, 0, {
+		label: "Reconnect",
+		run: () => {
+			void connections
+				.reconnect(payload.connectionId)
+				.catch((err: unknown) => toast(errorMessage(err)));
+		},
+	});
 }
 
 function handleBeforeUnload(event: BeforeUnloadEvent): void {
@@ -135,14 +210,17 @@ function handleBeforeUnload(event: BeforeUnloadEvent): void {
 onMounted(() => {
 	rpc.addMessageListener("connectionLost", onConnectionLost);
 	window.addEventListener("beforeunload", handleBeforeUnload);
-	window.addEventListener("keydown", onQuickOpenKeydown);
+	// The dispatcher is registered before its listener is attached so the
+	// first keydown already has implementations to run.
+	registerShortcutCommands();
+	window.addEventListener("keydown", onShortcutKeydown);
 	window.addEventListener("keydown", onBookmarkJumpKeydown);
 });
 
 onBeforeUnmount(() => {
 	rpc.removeMessageListener("connectionLost", onConnectionLost);
 	window.removeEventListener("beforeunload", handleBeforeUnload);
-	window.removeEventListener("keydown", onQuickOpenKeydown);
+	window.removeEventListener("keydown", onShortcutKeydown);
 	window.removeEventListener("keydown", onBookmarkJumpKeydown);
 });
 </script>
@@ -179,6 +257,7 @@ onBeforeUnmount(() => {
 		</div>
 		<ConnectionDialog v-model:open="connectionDialogOpen" :edit-id="connectionEditId" />
 		<SnippetsSettings v-model:open="snippetsOpen" />
+		<KeyboardShortcutsSettings v-model:open="shortcutsOpen" />
 		<QuickOpenDialog />
 
 		<Dialog v-model:open="settingsOpen">
@@ -199,6 +278,9 @@ onBeforeUnmount(() => {
 					<Button variant="outline" size="sm" @click="openSnippetsSettings">
 						SQL snippets…
 					</Button>
+					<Button variant="outline" size="sm" @click="openShortcutSettings">
+						Keyboard shortcuts…
+					</Button>
 					<Button variant="destructive" @click="tabs.closeAll()">
 						Close all tabs
 					</Button>
@@ -207,5 +289,6 @@ onBeforeUnmount(() => {
 		</Dialog>
 
 		<ToastHost />
+		<TabCloseDialog />
 	</div>
 </template>

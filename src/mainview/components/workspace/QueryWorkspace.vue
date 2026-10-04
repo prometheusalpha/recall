@@ -626,6 +626,26 @@ function retryTable(): void {
 	attemptedTableTabs.value[tab.id] = false;
 	void loadTable(tab);
 }
+
+/**
+ * Reopens the tab's connection, then replays what the grid was showing.
+ *
+ * The failure on screen outlives the socket that caused it, so a reconnect
+ * that only restores the session would leave the user staring at an error that
+ * is already fixed. A failed reconnect reports the server's own reason instead:
+ * the panel stays, and it is the truth again.
+ */
+async function reconnectActive(): Promise<void> {
+	const tab = activeTab.value;
+	if (!tab) return;
+	try {
+		await connectionsStore.reconnect(tab.connectionId);
+	} catch (err) {
+		toast(errorMessage(err));
+		return;
+	}
+	rerunActive();
+}
 </script>
 
 <template>
@@ -742,7 +762,11 @@ function retryTable(): void {
 				class="flex min-h-0 flex-col"
 			>
 				<StatementBar v-if="tabId" :tab-id="tabId" />
-				<ResultGrid v-if="activeResult" :result="activeResult" />
+				<ResultGrid
+					v-if="activeResult"
+					:result="activeResult"
+					@reconnect="reconnectActive"
+				/>
 				<p
 					v-else
 					class="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-xs text-muted-foreground"

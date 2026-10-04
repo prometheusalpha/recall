@@ -142,6 +142,11 @@ export const useBookmarksStore = defineStore("bookmarks", () => {
 				return;
 			}
 			await load();
+			// An already-open tab is not on screen: `openQueryTab` activated the
+			// new one for us, but nothing has to raise an old one. Without this
+			// the caret lands on a line nobody is looking at, and the jump is
+			// only applied once the user happens to click the tab themselves.
+			tabs.activate(tab.id);
 			pendingJump.value = { tabId: tab.id, line: resolved.line };
 		} catch (err) {
 			toast(errorMessage(err));

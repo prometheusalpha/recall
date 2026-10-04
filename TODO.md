@@ -55,10 +55,12 @@ Phase 9:
 - [x] Cell tự resize theo width của nội dung (có 1 min / max nào đó)
 - [x] Paging ở màn table result grid
 
+Phase 10:
+- [x] Keyboard shortcuts mechanism / settings, nhất là close others, next/previous tab, close tab
+- [x] Nội dung trong toast đang bị cắt đi mất - cần nút expand
+
 Sau:
-- Keyboard shortcuts mechanism / settings, nhất là close others
-- Mnemonic bookmark có thể nhảy vào khi k mở file chứa cái mnemonic đó (Chưa work)
-- Auto suggest field / table ở editor
+- Auto suggest field / table ở editor (code mirror autocomplete logic)
 - Gợi ý cột ở where và order by
 - Cơ chế update
 - Redis support

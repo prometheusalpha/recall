@@ -1,14 +1,57 @@
 <script setup lang="ts">
-import { X } from "lucide-vue-next";
+import { ChevronDown, ChevronUp, X } from "lucide-vue-next";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useToast } from "../../composables/useToast";
 
-const { message, visible, action, dismiss } = useToast();
+const { message, visible, action, dismiss, hold, release } = useToast();
+
+/** True while the toast shows the message unclamped, scrolled up to 60vh. */
+const expanded = ref(false);
+/** Whether the clamped message has more content than it can show. */
+const overflows = ref(false);
+const messageEl = ref<HTMLSpanElement | null>(null);
+
+/**
+ * A clamped span hides the fact that it is hiding something, so the expand
+ * affordance is shown only when the text genuinely does not fit. Measured after
+ * layout settles, since `scrollHeight` is meaningless before the span has a box.
+ */
+async function measure(): Promise<void> {
+	await nextTick();
+	const el = messageEl.value;
+	overflows.value = !!el && el.scrollHeight > el.clientHeight + 1;
+}
 
 /** Runs the toast's single action, then clears the toast it belongs to. */
 function runAction(): void {
 	action.value?.run();
 	dismiss();
 }
+
+/** A window shrink can make the clamped text fit again — re-measure it. */
+function onResize(): void {
+	void measure();
+}
+
+onMounted(() => window.addEventListener("resize", onResize));
+onBeforeUnmount(() => window.removeEventListener("resize", onResize));
+
+// A new toast must not inherit the previous one's expansion or its chevron.
+watch(visible, async (shown) => {
+	if (!shown) return;
+	expanded.value = false;
+	overflows.value = false;
+	await measure();
+});
+watch(message, measure);
+watch(expanded, (isExpanded) => {
+	// The toast must not disappear out from under a user reading the full text;
+	// collapsing hands back a fresh full auto-hide delay, not the leftovers.
+	if (isExpanded) hold();
+	else release();
+	// Expanding changes the clamp, so the fit verdict has to be taken again.
+	void measure();
+});
 </script>
 
 <template>
@@ -29,9 +72,15 @@ function runAction(): void {
 		>
 			<div
 				v-if="visible"
-				class="flex items-center gap-2 rounded-md border border-border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg"
+				class="flex items-start gap-2 rounded-md border border-border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg"
 			>
-				<span class="min-w-0 flex-1 truncate">{{ message }}</span>
+				<span
+					ref="messageEl"
+					class="min-w-0 flex-1 break-words"
+					:class="expanded ? 'max-h-[60vh] overflow-y-auto whitespace-pre-wrap' : 'line-clamp-2 whitespace-pre-wrap'"
+				>
+					{{ message }}
+				</span>
 				<button
 					v-if="action"
 					type="button"
@@ -39,6 +88,22 @@ function runAction(): void {
 					@click="runAction"
 				>
 					{{ action.label }}
+				</button>
+				<!--
+					Only rendered when the clamp actually hides text: a one-line toast
+					growing a chevron would be a control that does nothing.
+				-->
+				<button
+					v-if="overflows"
+					type="button"
+					class="hover:bg-muted hover:text-foreground focus-visible:ring-ring/50 focus-visible:ring-2 focus-visible:outline-none inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors"
+					:aria-label="expanded ? 'Collapse notification' : 'Expand notification'"
+					:aria-expanded="expanded"
+					@click="expanded = !expanded"
+				>
+					<!-- Collapsed shows "Up" because that is what pressing it will do. -->
+					<ChevronUp v-if="!expanded" class="size-3.5" aria-hidden="true" />
+					<ChevronDown v-else class="size-3.5" aria-hidden="true" />
 				</button>
 				<!-- Auto-hide is the primary exit; this is only for hover/keyboard users. -->
 				<button

@@ -23,6 +23,7 @@ import {
 	ChevronRight,
 	ChevronsLeft,
 	Download,
+	RefreshCw,
 	TriangleAlertIcon,
 } from "lucide-vue-next";
 import { RecycleScroller } from "vue-virtual-scroller";
@@ -134,6 +135,12 @@ const props = withDefaults(
 const emit = defineEmits<{
 	/** Re-run the statement that produced this result. */
 	rerun: [];
+	/**
+	 * The failure may be a dead session rather than bad SQL. The grid knows the
+	 * error, not the connection, so it asks for one and the workspace owns the
+	 * reconnect and the re-run.
+	 */
+	reconnect: [];
 	/** The table tab's sort, so the caller can rebuild its SELECT. */
 	sort: [column: string, direction: "asc" | "desc"];
 	/** The toolbar asked for an export; the caller owns the folder picker. */
@@ -1388,6 +1395,10 @@ function rowKey(_row: unknown, index: number): number {
 					Line {{ error.errorPosition.line }}, column {{ error.errorPosition.column }}
 				</span>
 			</div>
+			<Button variant="outline" size="sm" :disabled="busy" @click="emit('reconnect')">
+				<RefreshCw aria-hidden="true" />
+				Reconnect
+			</Button>
 		</div>
 
 		<template v-else>

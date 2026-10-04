@@ -7,18 +7,11 @@
  * rather than HTML5 drag-and-drop, so a drop can be decided against live DOM
  * geometry and the strip's own scrolling keeps working.
  */
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 import { PinIcon, PinOffIcon, PlusIcon, XIcon } from "lucide-vue-next";
 import { useTabsStore } from "../../stores/tabs";
 import type { Tab } from "../../stores/tabs";
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "../ui/dialog";
+import { useTabClose } from "../../composables/useTabClose";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -193,53 +186,9 @@ onBeforeUnmount(() => {
  * Dirty-close confirmation
  * ---------------------------------------------------------------------- */
 
-/** Ids awaiting the unsaved-changes answer; dirty tabs are held back until then. */
-const pendingCloseIds = ref<string[]>([]);
-const pendingCloseTitles = computed(() =>
-	tabsStore.tabs
-		.filter((tab) => pendingCloseIds.value.includes(tab.id))
-		.map((tab) => tab.title),
-);
-
-const closeDialogOpen = computed({
-	get: () => pendingCloseIds.value.length > 0,
-	set: (open: boolean) => {
-		if (!open) pendingCloseIds.value = [];
-	},
-});
-
-function requestClose(tab: Tab): void {
-	const result = tabsStore.close(tab.id);
-	if (result.closed) return;
-	if (result.reason === "dirty") pendingCloseIds.value = [tab.id];
-}
-
-function cancelClose(): void {
-	pendingCloseIds.value = [];
-}
-
-function discardAndClose(): void {
-	for (const id of pendingCloseIds.value) tabsStore.close(id, { force: true });
-	pendingCloseIds.value = [];
-}
-
-function saveAndClose(): void {
-	const ids = [...pendingCloseIds.value];
-	pendingCloseIds.value = [];
-	for (const id of ids) {
-		tabsStore.markSaved(id);
-		tabsStore.close(id);
-	}
-}
-
-// A connection going away can close the tab out from under the dialog.
-watch(
-	() => tabsStore.tabs,
-	(list) => {
-		const live = new Set(list.map((tab) => tab.id));
-		pendingCloseIds.value = pendingCloseIds.value.filter((id) => live.has(id));
-	},
-);
+// The queue and its dialog are shared with the rest of the window, so that a
+// keyboard shortcut raising the same question reuses this one prompt.
+const { requestClose, requestCloseOthers } = useTabClose();
 
 /* -------------------------------------------------------------------------
  * Context menu and inline rename
@@ -323,11 +272,7 @@ function closeMenuOthers(): void {
 	if (!tab) return;
 	// Close the dropdown first so it is not competing with the dialog for focus.
 	menuOpen.value = false;
-	// Right-clicking focuses the tab, so the survivor is where the user looks.
-	tabsStore.activate(tab.id);
-	const { dirtyIds } = tabsStore.closeOthers(tab.id);
-	// Tabs holding unsaved SQL survived the sweep; ask before losing them.
-	if (dirtyIds.length > 0) pendingCloseIds.value = dirtyIds;
+	requestCloseOthers(tab.id);
 }
 </script>
 
@@ -391,7 +336,7 @@ function closeMenuOthers(): void {
 						type="button"
 						class="tab-close"
 						:aria-label="`Close ${entry.tab.title}`"
-						@click.stop="requestClose(entry.tab)"
+						@click.stop="requestClose(entry.tab.id)"
 					>
 						<XIcon class="size-3" aria-hidden="true" />
 					</button>
@@ -452,28 +397,4 @@ function closeMenuOthers(): void {
 			</DropdownMenuContent>
 		</DropdownMenu>
 	</div>
-
-	<Dialog v-model:open="closeDialogOpen">
-		<DialogContent class="sm:max-w-md">
-			<DialogHeader>
-				<DialogTitle>Unsaved changes</DialogTitle>
-				<DialogDescription>
-					<template v-if="pendingCloseTitles.length > 1">
-						{{ pendingCloseTitles.length }} tabs have SQL that has not been
-						saved ({{ pendingCloseTitles.join(", ") }}). Save them, discard
-						them, or go back to editing?
-					</template>
-					<template v-else>
-						{{ pendingCloseTitles[0] }} has SQL that has not been saved. Save
-						it, discard it, or go back to editing?
-					</template>
-				</DialogDescription>
-			</DialogHeader>
-			<DialogFooter>
-				<Button variant="ghost" @click="cancelClose">Cancel</Button>
-				<Button variant="destructive" @click="discardAndClose">Discard</Button>
-				<Button variant="default" @click="saveAndClose">Save</Button>
-			</DialogFooter>
-		</DialogContent>
-	</Dialog>
 </template>

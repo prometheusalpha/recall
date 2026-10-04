@@ -361,6 +361,27 @@ export const useConnectionsStore = defineStore("connections", () => {
 		if (activeId.value === id) activeId.value = null;
 	}
 
+	/**
+	 * Records a session the backend saw die under it.
+	 *
+	 * The pool drops the dead socket on its own, so without this the profile
+	 * would keep saying `connected` while every request against it failed with
+	 * "No open connection" — and `ensureConnected`, which trusts that status,
+	 * would keep skipping the reconnect. Marking it `disconnected` hands the
+	 * next query path a real connect to make.
+	 *
+	 * A profile with a database-scoped driver can lose a secondary session
+	 * while its primary is still up. `disconnected` is the conservative answer
+	 * for that: the next request reconnects the profile, which is a no-op in
+	 * effect and reopens the dead database's session on the way.
+	 */
+	function markLost(id: string): void {
+		if (status.value[id] === undefined) return;
+		status.value[id] = "disconnected";
+		delete databaseInfo.value[id];
+		if (activeId.value === id) activeId.value = null;
+	}
+
 	async function disconnect(id: string): Promise<void> {
 		await closeSession(id);
 		// Connections own tab lifetime: a tab whose connection is gone is dead.
@@ -550,6 +571,7 @@ export const useConnectionsStore = defineStore("connections", () => {
 		connect,
 		disconnect,
 		reconnect,
+		markLost,
 		test,
 		ensureConnected,
 		listDatabases,
