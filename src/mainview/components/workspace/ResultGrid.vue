@@ -142,6 +142,47 @@ const pageRows = ref(20);
 const scrollerEl = ref<HTMLElement | null>(null);
 
 /**
+ * The header's own horizontal scroller.
+ *
+ * The body is the vertical scroller and it spans the full width of the pane,
+ * so its scrollbar sits on the pane's right edge and stays there however far
+ * the columns are scrolled. The header therefore cannot live inside that same
+ * box — it would inherit the body's scroll position and scroll away with it.
+ * It scrolls independently instead, and the two are tied together by
+ * `syncHeaderScroll`, so a column header always sits over its own column.
+ */
+const headerScrollEl = ref<HTMLElement | null>(null);
+
+/**
+ * Keeps the header aligned with the body.
+ *
+ * Assignment is guarded because setting `scrollLeft` fires a scroll event on
+ * the header too: without the equality check the two would push each other
+ * forever. The guard is what makes the pairing one-way per gesture rather than
+ * a feedback loop.
+ */
+function syncHeaderScroll(): void {
+	const body = scrollerEl.value;
+	const header = headerScrollEl.value;
+	if (!body || !header) return;
+	if (header.scrollLeft !== body.scrollLeft) header.scrollLeft = body.scrollLeft;
+}
+
+/**
+ * The same pairing from the other end: dragging the header's scrollbar moves
+ * the body. The header is the one users reach for when the column they want is
+ * off to the right, so it has to drive as well as follow.
+ */
+function syncBodyScroll(): void {
+	const body = scrollerEl.value;
+	const header = headerScrollEl.value;
+	if (!body || !header) return;
+	if (body.scrollLeft !== header.scrollLeft) body.scrollLeft = header.scrollLeft;
+}
+
+
+
+/**
  * Explicit width per column, keyed by name. Absent means the shared default.
  * Keying by name rather than index is what lets a width survive hiding a
  * different column and re-running the statement.
@@ -162,6 +203,13 @@ function totalWidthFor(list: string[]): number {
 }
 
 const totalWidth = computed(() => totalWidthFor(columns.value));
+
+// A column resize or a column being hidden changes the content width, which
+// clamps whichever scroller is scrolled furthest right. Re-pairing after the
+// DOM settles keeps the header from being left behind at a stale offset.
+watch([totalWidth, columns], () => {
+	void nextTick(syncHeaderScroll);
+});
 
 /** Widths for the header and the body, so the two stay aligned by construction. */
 function cellStyleFor(column: string): CSSProperties {
@@ -640,7 +688,7 @@ const rowStyle = computed<CSSProperties>(() => ({
 	height: `${ROW_HEIGHT}px`,
 	width: `${totalWidth.value}px`,
 }));
-const gridStyle = computed<CSSProperties>(() => ({ width: `${totalWidth.value}px` }));
+
 
 function isNullValue(value: unknown): boolean {
 	return value === null || value === undefined;
@@ -745,152 +793,162 @@ function rowKey(_row: unknown, index: number): number {
 				@rerun="emit('rerun')"
 			/>
 
-			<!-- One horizontal scroller: the header sits above the vertical one. -->
+		<!--
+		     The header scrolls horizontally on its own, above a body that
+		     scrolls vertically. Nesting the header inside the body's scroller is
+		     what put the scrollbar in the wrong place: a scroller is as wide as
+		     its content, so a scrollbar belonging to a container that spans the
+		     columns travels with them and slides away on a horizontal scroll.
+		     Two scrollers tied together by `syncHeaderScroll` keep the scrollbar
+		     pinned to the pane's right edge, which is also what makes the last
+		     column's right border land beside it rather than under it. -->
+		<div
+			ref="headerScrollEl"
+			class="recall-scroll shrink-0 overflow-x-auto overflow-y-hidden"
+			role="row"
+			:style="{ height: `${HEADER_HEIGHT}px` }"
+			@scroll="syncBodyScroll"
+		>
 			<div
-				class="recall-scroll min-h-0 flex-1 overflow-x-auto overflow-y-hidden"
-				role="table"
-				:aria-rowcount="rows.length"
-				:aria-colcount="columns.length + 1"
-				aria-label="Query results"
+				class="flex h-full"
+				role="presentation"
+				:style="{ width: `${totalWidth}px` }"
 			>
 				<div
-					class="flex h-full min-h-0 flex-col"
-					role="presentation"
-					:style="gridStyle"
+					class="grid-header-cell grid-row-number"
+					role="columnheader"
+					:style="rowNumberStyle"
+					aria-label="Row number"
 				>
+					#
+				</div>
+				<!-- `tabindex`/`aria-haspopup` because a sort is now a menu:
+				     a pointer is not the only way to open it. `aria-label`
+				     names the column for a screen reader, which would
+				     otherwise read the truncated text. -->
+				<div
+					v-for="(column, columnIndex) in columns"
+					:key="column"
+					class="grid-header-cell"
+					role="columnheader"
+					:style="cellStyleFor(column)"
+					:title="column"
+					:aria-label="column"
+					tabindex="0"
+					:aria-haspopup="sortable ? 'menu' : undefined"
+					:data-selected="columnIsSelected(columnIndex)"
+					@click="onHeaderClick(columnIndex, $event)"
+					@contextmenu="onHeaderContextMenu(column, $event)"
+					@keydown="onHeaderKeydown(column, $event)"
+				>
+					<span class="truncate">{{ column }}</span>
+					<ArrowUp
+						v-if="sortIcon(column) === 'asc'"
+						class="size-3 shrink-0 text-primary"
+						aria-hidden="true"
+					/>
+					<ArrowDown
+						v-else-if="sortIcon(column) === 'desc'"
+						class="size-3 shrink-0 text-primary"
+						aria-hidden="true"
+					/>
+					<!-- The handle sits on the column's trailing edge; a
+					     double-click on it restores the shared default. -->
 					<div
-						class="flex shrink-0"
-						role="row"
-						:style="{ height: `${HEADER_HEIGHT}px` }"
-					>
+						class="grid-column-resize"
+						role="separator"
+						aria-orientation="vertical"
+						:aria-label="`Resize ${column}`"
+						:title="`Resize ${column} — double-click to reset`"
+						@pointerdown="startColumnResize($event, column)"
+						@dblclick.stop="resetColumnWidth(column)"
+					/>
+				</div>
+			</div>
+		</div>
+
+		<!-- The vertical scroller spans the pane's full width, so its scrollbar
+		     sits on the pane's right edge and stays there however far the
+		     columns are scrolled. It scrolls horizontally too, which is what
+		     gives the rows a common left edge to share with the header. -->
+		<div
+			ref="scrollerEl"
+			class="grid-body recall-scroll min-h-0 flex-1 overflow-auto outline-none"
+			role="rowgroup"
+			:aria-rowcount="rows.length"
+			:aria-colcount="columns.length + 1"
+			aria-label="Query results"
+			tabindex="0"
+			:aria-activedescendant="selection.focus.value ? `cell-${selection.focus.value.row}-${selection.focus.value.col}` : undefined"
+			@click="gridFocused = true"
+			@focus="gridFocused = true"
+			@blur="gridFocused = false"
+			@scroll="syncHeaderScroll"
+			@keydown="onKeydown"
+		>
+			<RecycleScroller
+				class="min-h-full"
+				:items="rows"
+				:key-field="rowKey"
+				:item-size="ROW_HEIGHT"
+				:buffer="240"
+				:skip-hover="true"
+			>
+				<template #default="{ item, index }">
+					<div class="grid-row flex" role="row" :style="rowStyle">
 						<div
-							class="grid-header-cell grid-row-number"
-							role="columnheader"
+							class="grid-cell grid-row-number"
+							role="cell"
 							:style="rowNumberStyle"
-							aria-label="Row number"
+							:data-selected="rowIsSelected(index)"
+							@click="onRowNumberClick(index, $event)"
 						>
-							#
+							{{ index + 1 }}
 						</div>
-						<!-- `tabindex`/`aria-haspopup` because a sort is now a menu:
-						     a pointer is not the only way to open it. `aria-label`
-						     names the column for a screen reader, which would
-						     otherwise read the truncated text. -->
 						<div
 							v-for="(column, columnIndex) in columns"
 							:key="column"
-							class="grid-header-cell"
-							role="columnheader"
+							:id="`cell-${index}-${columnIndex}`"
+							class="grid-cell"
+							role="cell"
 							:style="cellStyleFor(column)"
-							:title="column"
-							:aria-label="column"
-							tabindex="0"
-							:aria-haspopup="sortable ? 'menu' : undefined"
-							:data-selected="columnIsSelected(columnIndex)"
-							@click="onHeaderClick(columnIndex, $event)"
-							@contextmenu="onHeaderContextMenu(column, $event)"
-							@keydown="onHeaderKeydown(column, $event)"
+							:data-row="index"
+							:data-col="columnIndex"
+							:data-null="isNullAt(index, columnIndexes[columnIndex] ?? 0)"
+							:data-selected="selection.isSelected(index, columnIndex)"
+							:data-active="selection.isActive(index, columnIndex)"
+							:title="cellTitle(cellAt(item, columnIndexes[columnIndex] ?? 0))"
+							@click="onCellClick(index, columnIndex, $event)"
+							@pointerdown="onCellPointerDown(index, columnIndex, $event)"
+							@dblclick="startEdit(index, columnIndex)"
 						>
-							<span class="truncate">{{ column }}</span>
-							<ArrowUp
-								v-if="sortIcon(column) === 'asc'"
-								class="size-3 shrink-0 text-primary"
-								aria-hidden="true"
-							/>
-							<ArrowDown
-								v-else-if="sortIcon(column) === 'desc'"
-								class="size-3 shrink-0 text-primary"
-								aria-hidden="true"
-							/>
-							<!-- The handle sits on the column's trailing edge; a
-							     double-click on it restores the shared default. -->
-							<div
-								class="grid-column-resize"
-								role="separator"
-								aria-orientation="vertical"
-								:aria-label="`Resize ${column}`"
-								:title="`Resize ${column} — double-click to reset`"
-								@pointerdown="startColumnResize($event, column)"
-								@dblclick.stop="resetColumnWidth(column)"
-							/>
+							<!-- The editor replaces the text in place so the row
+							     never shifts and the surrounding selection stays visible. -->
+							<input
+								v-if="editing?.row === index && editing?.col === columnIndex"
+								ref="editorEl"
+								v-model="editing.draft"
+								class="grid-cell-editor"
+								@keydown.enter.prevent="commitEdit()"
+								@keydown.tab.prevent="commitEdit({ row: index, col: columnIndex + 1 })"
+								@keydown.esc.prevent="cancelEdit"
+								@blur="commitEdit()"
+							>
+							<span v-else class="truncate">{{
+								cellDisplayValue(
+									cellAt(item, columnIndexes[columnIndex] ?? 0),
+								)
+							}}</span>
 						</div>
 					</div>
-
-					<div
-						ref="scrollerEl"
-						class="grid-body min-h-0 flex-1 overflow-y-auto outline-none"
-						role="rowgroup"
-						tabindex="0"
-						:aria-activedescendant="selection.focus.value ? `cell-${selection.focus.value.row}-${selection.focus.value.col}` : undefined"
-						@click="gridFocused = true"
-						@focus="gridFocused = true"
-						@blur="gridFocused = false"
-						@keydown="onKeydown"
-					>
-						<RecycleScroller
-							class="min-h-full"
-							:items="rows"
-							:key-field="rowKey"
-							:item-size="ROW_HEIGHT"
-							:buffer="240"
-							:skip-hover="true"
-						>
-							<template #default="{ item, index }">
-								<div class="grid-row flex" role="row" :style="rowStyle">
-									<div
-										class="grid-cell grid-row-number"
-										role="cell"
-										:style="rowNumberStyle"
-										:data-selected="rowIsSelected(index)"
-										@click="onRowNumberClick(index, $event)"
-									>
-										{{ index + 1 }}
-									</div>
-									<div
-										v-for="(column, columnIndex) in columns"
-										:key="column"
-										:id="`cell-${index}-${columnIndex}`"
-										class="grid-cell"
-										role="cell"
-										:style="cellStyleFor(column)"
-										:data-row="index"
-										:data-col="columnIndex"
-										:data-null="isNullAt(index, columnIndexes[columnIndex] ?? 0)"
-										:data-selected="selection.isSelected(index, columnIndex)"
-										:data-active="selection.isActive(index, columnIndex)"
-										:title="cellTitle(cellAt(item, columnIndexes[columnIndex] ?? 0))"
-										@click="onCellClick(index, columnIndex, $event)"
-										@pointerdown="onCellPointerDown(index, columnIndex, $event)"
-										@dblclick="startEdit(index, columnIndex)"
-									>
-										<!-- The editor replaces the text in place so the row
-										     never shifts and the surrounding selection stays visible. -->
-										<input
-											v-if="editing?.row === index && editing?.col === columnIndex"
-											ref="editorEl"
-											v-model="editing.draft"
-											class="grid-cell-editor"
-											@keydown.enter.prevent="commitEdit()"
-											@keydown.tab.prevent="commitEdit({ row: index, col: columnIndex + 1 })"
-											@keydown.esc.prevent="cancelEdit"
-											@blur="commitEdit()"
-										>
-										<span v-else class="truncate">{{
-											cellDisplayValue(
-												cellAt(item, columnIndexes[columnIndex] ?? 0),
-											)
-										}}</span>
-									</div>
-								</div>
-							</template>
-							<template #empty>
-								<div class="px-3 py-6 text-center text-xs text-muted-foreground">
-									No rows
-								</div>
-							</template>
-						</RecycleScroller>
+				</template>
+				<template #empty>
+					<div class="px-3 py-6 text-center text-xs text-muted-foreground">
+						No rows
 					</div>
-				</div>
-			</div>
+				</template>
+			</RecycleScroller>
+		</div>
 			<!-- One menu for every header. The headers live in a horizontal
 			     scroller over a virtualised body, so a per-cell menu would
 			     remount with it; this one is parked here, once, and anchored at

@@ -11,10 +11,13 @@ const delegatedProps = reactiveOmit(props, 'class')
 </script>
 
 <template>
+  <!-- Light scrim for plain dialogs; black-based for the same reason as
+       DialogScrollContent's overlay (`--foreground` is near-white in dark themes).
+       Kept lighter than the connection-dialog scrim so plain dialogs stay airy. -->
   <DialogOverlay
     data-slot="dialog-overlay"
     v-bind="delegatedProps"
-    :class="cn('data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 bg-foreground/10 duration-100 supports-backdrop-filter:backdrop-blur-xs fixed inset-0 isolate z-50', props.class)"
+    :class="cn('data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 bg-black/40 duration-100 supports-backdrop-filter:backdrop-blur-xs fixed inset-0 isolate z-50', props.class)"
   >
     <slot />
   </DialogOverlay>

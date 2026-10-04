@@ -26,8 +26,17 @@ Phase 4:
 - [x] Phần run against trong sql editor ấy, phần list connection và database chưa có height limit + scroll
 
 Phase 5:
+- Nút reconnect connection ở context menu connection 
+- Phần bên ngoài của modal create/edit connection trắng quá, cho đen lại 
+- Border phải của cột ngoài cùng bị thiếu
+- Icon của connection hiển thị loại db (Icon của mysql / postgres)
+
+Phase 6:
+- Keyboard shortcuts mechanism / settings, nhất là close others
 - Mnemonic có thể nhảy khi k mở file
-- Paging table result grid
+- Paging ở màn table result grid
+- Bug khi select cell cột cuối thì row index highlight lên
+- Border ngăn cách editor và result ở màn sql chưa rõ ràng, và cần thêm khả năng kéo resize
 
 Sau:
 - Kéo thả vị trí cột

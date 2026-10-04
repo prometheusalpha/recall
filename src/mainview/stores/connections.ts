@@ -341,7 +341,12 @@ export const useConnectionsStore = defineStore("connections", () => {
 		}
 	}
 
-	async function disconnect(id: string): Promise<void> {
+	/**
+	 * Drops the backend session and the local state that described it, leaving
+	 * tab lifetime alone. Callers that are *ending* a connection rather than
+	 * restarting one use `disconnect`, which is this plus the tab sweep.
+	 */
+	async function closeSession(id: string): Promise<void> {
 		try {
 			await rpc.request.disconnect(
 				{ connectionId: id },
@@ -354,8 +359,32 @@ export const useConnectionsStore = defineStore("connections", () => {
 		status.value[id] = "disconnected";
 		delete databaseInfo.value[id];
 		if (activeId.value === id) activeId.value = null;
+	}
+
+	async function disconnect(id: string): Promise<void> {
+		await closeSession(id);
 		// Connections own tab lifetime: a tab whose connection is gone is dead.
 		useTabsStore().closeForConnection(id);
+	}
+
+	/**
+	 * Drops the current session and opens a fresh one in its place.
+	 *
+	 * The teardown goes through `closeSession`, not `disconnect`, so the user's
+	 * tabs survive: a reconnect ends with the profile connected again, and every
+	 * query path re-asserts the connection through `ensureConnected`, so a tab
+	 * left standing is live rather than dead. Sweeping them here would throw
+	 * away the user's work to rebuild a session that is about to exist anyway.
+	 *
+	 * A profile already sitting in `error` or `disconnected` has no session to
+	 * drop, so the teardown is skipped entirely. The connect failure is
+	 * deliberately not caught: `connect` has already recorded `error` on the
+	 * profile, and swallowing the reason here would leave the caller with no way
+	 * to tell a failed reconnect from a success.
+	 */
+	async function reconnect(id: string): Promise<void> {
+		if (status.value[id] === "connected") await closeSession(id);
+		await connect(id);
 	}
 
 	async function test(config: ConnectionConfig): Promise<ConnectionTestResult> {
@@ -520,6 +549,7 @@ export const useConnectionsStore = defineStore("connections", () => {
 		remove,
 		connect,
 		disconnect,
+		reconnect,
 		test,
 		ensureConnected,
 		listDatabases,

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, defineComponent, h, ref, watch } from "vue";
 import type { Component } from "vue";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
-import { Columns3, Database, Folder, Key, Link, Pencil, Search, Server, Table2, Zap } from "lucide-vue-next";
+import { Columns3, Database, Folder, Key, Link, Pencil, RefreshCw, Search, Table2, Zap } from "lucide-vue-next";
+import DatabaseIcon from "../icons/DatabaseIcon.vue";
 import TreeRow from "./TreeRow.vue";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -26,6 +27,7 @@ import type {
 	IndexInfo,
 	TriggerInfo,
 } from "../../../shared/types";
+import type { DatabaseType } from "../../../shared/types";
 
 /** Must match `RecycleScroller`'s `item-size` and the `.tree-row` height. */
 const ROW_HEIGHT = 28;
@@ -61,6 +63,7 @@ type TreeNode =
 			id: string;
 			label: string;
 			status: ConnectionStatus;
+			dbType: DatabaseType;
 	  }
 	| {
 			kind: "database";
@@ -261,6 +264,7 @@ const roots = computed<TreeNode[]>(() =>
 		id: config.id,
 		label: config.name,
 		status: connections.status[config.id] ?? "disconnected",
+		dbType: config.dbType,
 	})),
 );
 
@@ -612,6 +616,67 @@ function dropTableLists(): void {
 	failedGroups.value.clear();
 }
 
+/**
+ * Drops the cached lists of one connection only, because the session they came
+ * from has just been replaced. A global drop would throw away every other
+ * connection's cache and make a reconnect cost the user their whole tree.
+ *
+ * Keys are length-prefixed and carry no connection id in a readable position,
+ * so the subtree is walked instead of pattern-matched: each node's own children
+ * are dropped only after its descendants have been reached, which the
+ * depth-first pass below does by collecting keys before deleting any.
+ *
+ * Expansion survives — the user opened those nodes and meant to — so the
+ * reconnecting connection is refetched at the same depth it was left.
+ */
+function dropConnectionLists(connectionId: string): void {
+	const connection = roots.value.find(
+		(node): node is Extract<TreeNode, { kind: "connection" }> =>
+			node.kind === "connection" && node.id === connectionId,
+	);
+	if (!connection) return;
+
+	const stale: string[] = [];
+	const walk = (node: TreeNode): void => {
+		stale.push(node.key);
+		for (const child of childrenOf(node) ?? []) walk(child);
+	};
+	walk(connection);
+
+	for (const key of stale) {
+		children.value.delete(key);
+		tableMeta.value.delete(key);
+		failedGroups.value.delete(key);
+		// A group whose leaves were just dropped would render as expanded and
+		// empty; closing it is also what lets the next expand refetch them.
+		if (key.startsWith(`${KEY_PREFIX.group}|`)) expanded.value.delete(key);
+	}
+}
+
+/**
+ * Replaces a connection's session and re-reads what the user has open.
+ *
+ * The cache drop and the refetch are the point of the action: without them the
+ * tree would keep showing database and table lists produced by a socket the
+ * backend has already dropped, which look valid right up until they are used.
+ */
+async function reconnectConnection(): Promise<void> {
+	const id = menuConnectionId.value;
+	if (!id) return;
+	try {
+		await connections.reconnect(id);
+	} catch (err) {
+		toast(errorMessage(err));
+		return;
+	}
+	dropConnectionLists(id);
+	try {
+		await reloadOpenContainers();
+	} catch (err) {
+		toast(errorMessage(err));
+	}
+}
+
 /** Refetches every container node that is currently open, after a cache drop. */
 async function reloadOpenContainers(): Promise<void> {
 	for (const connection of roots.value) {
@@ -663,7 +728,12 @@ const rows = computed<FlatTreeNode<TreeNode>[]>(() =>
  * and one hue per metadata group. Leaves carry none — their label says it all.
  */
 function rowGlyph(node: TreeNode): { icon?: Component; iconClass: string } {
-	if (node.kind === "connection") return { icon: Server, iconClass: "text-amber-500" };
+	// A brand mark carries its own colour, so the connection row wears no tint
+	// — tinting a logo only muddies it. The status dot beside the label is what
+	// still says whether that session is live.
+	if (node.kind === "connection") {
+		return { icon: databaseIconFor(node.dbType), iconClass: "" };
+	}
 	if (node.kind === "database") return { icon: Database, iconClass: "text-yellow-500" };
 	if (node.kind === "schema") {
 		return { icon: Folder, iconClass: "text-yellow-500" };
@@ -674,6 +744,21 @@ function rowGlyph(node: TreeNode): { icon?: Component; iconClass: string } {
 		return { icon: group.icon, iconClass: group.iconClass };
 	}
 	return { iconClass: "text-muted-foreground" };
+}
+
+/**
+ * A vendor mark per dialect, built once. The rows render icons through
+ * `<component :is>` with no props of their own, so each mark is wrapped to
+ * carry its dialect — `DatabaseIcon` cannot be told which one it is from the
+ * caller.
+ */
+const DATABASE_ICONS: Record<DatabaseType, Component> = {
+	postgres: defineComponent(() => () => h(DatabaseIcon, { dbType: "postgres" })),
+	mysql: defineComponent(() => () => h(DatabaseIcon, { dbType: "mysql" })),
+};
+
+function databaseIconFor(dbType: DatabaseType): Component {
+	return DATABASE_ICONS[dbType] ?? DATABASE_ICONS.postgres;
 }
 
 /**
@@ -900,6 +985,18 @@ defineExpose({ collapseAll, locateActiveTab });
 				/>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent class="w-48" aria-label="Connection actions">
+				<!-- Reconnect first: it is the action a broken session wants,
+				     while Edit is the one every row is offered. -->
+				<DropdownMenuItem
+					:disabled="
+						!menuConnectionId ||
+						connections.status[menuConnectionId] === 'connecting'
+					"
+					@select="reconnectConnection"
+				>
+					<RefreshCw aria-hidden="true" />
+					Reconnect
+				</DropdownMenuItem>
 				<DropdownMenuItem :disabled="!menuConnectionId" @select="editConnection">
 					<Pencil aria-hidden="true" />
 					Edit connection
