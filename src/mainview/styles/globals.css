@@ -505,41 +505,6 @@ body.panel-resizing * {
 	flex-shrink: 0;
 }
 
-/* The context row names what the active data tab is looking at, so the user
-   does not have to read the SQL to know which table they are editing. */
-.result-context-row {
-	display: flex;
-	align-items: center;
-	gap: 0.5rem;
-	height: 2.25rem;
-	flex-shrink: 0;
-	padding: 0 0.75rem;
-	border-bottom: 1px solid var(--border);
-overflow: hidden;
-}
-
-.result-context-pill {
-	display: inline-flex;
-	align-items: center;
-	min-width: 3rem;
-	padding: 0.125rem 0.5rem;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	background-color: color-mix(in srgb, var(--muted) 30%, transparent);
-	font-size: 0.75rem;
-	line-height: 1rem;
-	color: var(--muted-foreground);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-/* The table is the subject of the tab, so it gets the stronger fill. */
-.result-context-pill--primary {
-	background-color: color-mix(in srgb, var(--muted) 50%, transparent);
-	font-weight: 500;
-}
-
 /* Three zones: what came back and how long it took, the statement that
    produced it, then the control that acts on it. */
 .result-statusbar {

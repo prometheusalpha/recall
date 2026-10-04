@@ -19,7 +19,6 @@ import type { Tab } from "../../stores/tabs";
 import { toast } from "../../composables/useToast";
 import { errorMessage, rpc } from "../../lib/rpc";
 import ResultGrid from "./ResultGrid.vue";
-import ResultContextRow from "./ResultContextRow.vue";
 import SqlEditor from "./SqlEditor.vue";
 import StatementBar from "./StatementBar.vue";
 import TabStrip from "./TabStrip.vue";
@@ -185,11 +184,6 @@ function hiddenColumnsForTab(id: string | null): Set<string> {
 
 const activeHiddenColumns = computed(() => hiddenColumnsForTab(tabId.value));
 const activeResultColumns = computed(() => activeResult.value?.columns ?? []);
-const activeVisibleColumns = computed(() =>
-	activeResultColumns.value.filter(
-		(name) => !activeHiddenColumns.value.has(name),
-	),
-);
 
 function setVisibleColumns(next: string[]): void {
 	const id = tabId.value;
@@ -537,16 +531,6 @@ function retryTable(): void {
 		<Splitpanes v-else-if="isTableTab" horizontal class="min-h-0 flex-1">
 			<Pane :size="100" class="flex min-h-0 flex-col">
 				<StatementBar v-if="tabId" :tab-id="tabId" />
-				<ResultContextRow
-					v-if="activeTab"
-					:connection-id="activeTab.connectionId"
-					:database="activeTab.database"
-					:schema="activeTab.schema"
-					:table="activeTab.table || undefined"
-					:columns="activeResultColumns"
-					:visible-columns="activeVisibleColumns"
-					@update:visible-columns="setVisibleColumns"
-				/>
 				<ResultGrid
 					v-if="tableResult"
 					:result="tableResult"
@@ -558,6 +542,7 @@ function retryTable(): void {
 					:order-by="activeOrderBy"
 					@rerun="rerunActive"
 					@sort="onGridSort"
+					@update:visible-columns="setVisibleColumns"
 					@export="exportResult"
 					@update:where="setWhere"
 					@update:order-by="setOrderBy"

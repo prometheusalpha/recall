@@ -41,6 +41,12 @@ Phase 7:
 - [x] Khi đặt cursor vào 1 query thì border câu query to đó, và khi cmd enter thì chỉ chạy câu query đó (giống datagrip)
 - [x] Kéo thả vị trí cột
 
+Phase 8:
+- [x] Toast góc dưới phải, trông UI đẹp hơn
+- [x] Khi cuộn ngang table grid sang tận cùng bên phải mà tận cùng bên phải có scroll bar thì sẽ bị lệch với thành row header phía trên
+- [x] Bỏ cái phần 4 cái pill result-context-pill đi, mục Columns ở bên phải chúng nó thì cho xuống cạnh nút refresh. Bỏ cái All rows cạnh where đi
+- [x] Chọn cell rồi dùng phím mũi tên để di chuyển selection sang bên phải ngoài màn hình thì scroll không theo
+
 Sau:
 - Paging ở màn table result grid
 - Keyboard shortcuts mechanism / settings, nhất là close others

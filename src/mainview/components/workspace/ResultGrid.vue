@@ -95,6 +95,12 @@ const emit = defineEmits<{
 	export: [format: "csv" | "json"];
 	"update:where": [value: string];
 	"update:orderBy": [value: string];
+	/**
+	 * The caller wants the columns still visible. The filter bar reasons in
+	 * terms of the visible list, the workspace owns the hidden set, so this is
+	 * where one is turned into the other.
+	 */
+	"update:visibleColumns": [columns: string[]];
 	/** Enter in either filter field: re-run the statement with the new filter. */
 	applyFilter: [];
 }>();
@@ -133,6 +139,24 @@ const columns = computed(() => {
 	const placed = new Set(kept);
 	return [...kept, ...visible.filter((name) => !placed.has(name))];
 });
+
+/**
+ * The filter bar ticks columns off its own list; the workspace stores the
+ * hidden set. Converting here rather than in either of them keeps a single
+ * source of truth for visibility — this grid already renders from
+ * `hiddenColumns`, so a second copy would let the menu and the grid disagree.
+ *
+ * An empty `next` is a legitimate request (hide everything), not a mistake, so
+ * only a non-array is dropped.
+ */
+function onVisibleColumnsChange(next: string[]): void {
+	if (!Array.isArray(next)) return;
+	const visible = new Set(next);
+	emit(
+		"update:visibleColumns",
+		props.result.columns.filter((name) => !visible.has(name)),
+	);
+}
 /** Result index of each rendered column, so selection survives hiding columns. */
 const columnIndexes = computed(() =>
 	columns.value.map((name) => props.result.columns.indexOf(name)),
@@ -199,12 +223,18 @@ function scrollerNode(): HTMLElement | null {
  * the header too: without the equality check the two would push each other
  * forever. The guard is what makes the pairing one-way per gesture rather than
  * a feedback loop.
+ *
+ * The value is clamped to the header's own range. The two scrollers are sized
+ * to travel the same distance, but a layout that lands between a gutter
+ * measurement and a scroll can leave one of them shorter, and an
+ * unclamped offset is how the two would start to disagree.
  */
 function syncHeaderScroll(): void {
 	const body = scrollerNode();
 	const header = headerScrollEl.value;
 	if (!body || !header) return;
-	if (header.scrollLeft !== body.scrollLeft) header.scrollLeft = body.scrollLeft;
+	const paired = clampScrollLeft(header, body.scrollLeft);
+	if (header.scrollLeft !== paired) header.scrollLeft = paired;
 }
 
 /**
@@ -216,10 +246,69 @@ function syncBodyScroll(): void {
 	const body = scrollerNode();
 	const header = headerScrollEl.value;
 	if (!body || !header) return;
-	if (body.scrollLeft !== header.scrollLeft) body.scrollLeft = header.scrollLeft;
+	const paired = clampScrollLeft(body, header.scrollLeft);
+	if (body.scrollLeft !== paired) body.scrollLeft = paired;
 }
 
+/** How far an element can travel horizontally; 0 while it cannot scroll. */
+function maxScrollLeft(el: HTMLElement): number {
+	return Math.max(0, el.scrollWidth - el.clientWidth);
+}
+
+function clampScrollLeft(el: HTMLElement, value: number): number {
+	return Math.min(Math.max(value, 0), maxScrollLeft(el));
+}
+
+
+/**
+ * The body's vertical scrollbar takes width out of its client box, so the body
+ * travels further right than the header does and the pairing above clamps the
+ * header short of it — leaving the last column's header sitting to the left of
+ * its column. Widening the header's content by the same gutter gives it the
+ * body's horizontal range instead of its own narrower one.
+ *
+ * Overlay scrollbars report no gutter, so this settles at 0 on macOS and does
+ * nothing; on a platform with classic scrollbars it is the whole difference
+ * between aligned and not at the far right.
+ */
+const scrollbarGutter = ref(0);
+
+
+function measureScrollbarGutter(): void {
+	const body = scrollerNode();
+	// A scroller with no layout yet reports zero for both measurements, which
+	// is the same answer as "no scrollbar", so no special case is needed.
+	const gutter = body ? Math.max(0, body.offsetWidth - body.clientWidth) : 0;
+	if (gutter === scrollbarGutter.value) return;
+	scrollbarGutter.value = gutter;
+	// The header's range changed with it, so its scroll position may now be
+	// out of range and the pairing has to be redone after the re-render.
+	void nextTick(syncHeaderScroll);
+}
+
+
 const recycleRef = ref<{ $el: HTMLElement } | null>(null);
+/**
+ * The gutter is a layout measurement and no scroll event carries it: the pane
+ * changes width when the split is dragged, and a short result makes the
+ * vertical scrollbar disappear, both without either scroller scrolling.
+ * Resizing the scroller element is the one source those changes reach.
+ */
+let scrollerResizeObserver: ResizeObserver | null = null;
+
+watch(
+	recycleRef,
+	(scroller) => {
+		scrollerResizeObserver?.disconnect();
+		scrollerResizeObserver = null;
+		const element = scroller?.$el;
+		if (!(element instanceof HTMLElement)) return;
+		scrollerResizeObserver = new ResizeObserver(() => measureScrollbarGutter());
+		scrollerResizeObserver.observe(element);
+		measureScrollbarGutter();
+	},
+	{ immediate: true, flush: "post" },
+);
 
 
 
@@ -244,12 +333,18 @@ function totalWidthFor(list: string[]): number {
 }
 
 const totalWidth = computed(() => totalWidthFor(columns.value));
+const headerContentStyle = computed<CSSProperties>(() => ({
+	width: `${totalWidth.value + scrollbarGutter.value}px`,
+}));
 
 // A column resize or a column being hidden changes the content width, which
 // clamps whichever scroller is scrolled furthest right. Re-pairing after the
 // DOM settles keeps the header from being left behind at a stale offset.
 watch([totalWidth, columns], () => {
-	void nextTick(syncHeaderScroll);
+	void nextTick(() => {
+		measureScrollbarGutter();
+		syncHeaderScroll();
+	});
 });
 
 /** Widths for the header and the body, so the two stay aligned by construction. */
@@ -801,6 +896,8 @@ onBeforeUnmount(() => {
 	stopCellDrag();
 	stopColumnResize();
 	stopColumnDrag();
+	scrollerResizeObserver?.disconnect();
+	scrollerResizeObserver = null;
 });
 
 function onRowNumberClick(row: number, event: MouseEvent): void {
@@ -923,6 +1020,32 @@ function onKeydown(event: KeyboardEvent): void {
 		else if (bottom > container.scrollTop + container.clientHeight) {
 			container.scrollTop = bottom - container.clientHeight;
 		}
+
+		// The horizontal counterpart of the above: a cell can walk off the
+		// right edge exactly as a row walks off the bottom, and without this
+		// arrowing right simply stopped moving the caret once the column was
+		// past the viewport. `next.col` indexes the *visible* columns — the
+		// same list the row cells are rendered from — so its left edge is the
+		// row-number gutter plus the widths of the columns before it.
+		const column = columns.value[next.col];
+		if (column === undefined) return;
+		const left =
+			ROW_NUMBER_WIDTH +
+			columns.value
+				.slice(0, next.col)
+				.reduce((sum, name) => sum + widthFor(name), 0);
+		const right = left + widthFor(column);
+		if (left < container.scrollLeft) {
+			container.scrollLeft = left;
+		} else if (right > container.scrollLeft + container.clientWidth) {
+			container.scrollLeft = right - container.clientWidth;
+		} else {
+			return;
+		}
+		// The body's scroll event would eventually carry this to the header, but
+		// an assignment made in the same tick as a layout change can land before
+		// the browser dispatches it, leaving the header a frame behind.
+		syncHeaderScroll();
 	});
 }
 
@@ -938,6 +1061,9 @@ watch(
 		// the end of an order they were never part of.
 		columnOrder.value = [];
 		stopColumnDrag();
+		// A new result can be short enough to lose the body's vertical
+		// scrollbar, which changes the header's horizontal range.
+		void nextTick(measureScrollbarGutter);
 	},
 );
 
@@ -1048,8 +1174,11 @@ function rowKey(_row: unknown, index: number): number {
 				:order-by="orderBy"
 				:sortable="filterable"
 				:busy="busy"
+				:columns="result.columns"
+				:visible-columns="columns"
 				@update:where="(value) => emit('update:where', value)"
 				@update:order-by="(value) => emit('update:orderBy', value)"
+				@update:visible-columns="onVisibleColumnsChange"
 				@apply="emit('applyFilter')"
 				@rerun="emit('rerun')"
 			/>
@@ -1070,10 +1199,14 @@ function rowKey(_row: unknown, index: number): number {
 			:style="{ height: `${HEADER_HEIGHT}px` }"
 			@scroll="syncBodyScroll"
 		>
+			<!-- `headerContentStyle`, not the bare `totalWidth`: the body's
+			     vertical scrollbar makes its horizontal range the wider of the
+			     two, and matching that range is what keeps the rightmost
+			     header over its column. See `measureScrollbarGutter`. -->
 			<div
 				class="flex h-full"
 				role="presentation"
-				:style="{ width: `${totalWidth}px` }"
+				:style="headerContentStyle"
 			>
 				<div
 					class="grid-header-cell grid-row-number"

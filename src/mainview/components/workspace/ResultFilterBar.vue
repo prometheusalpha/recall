@@ -16,20 +16,30 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
 	DropdownMenu,
+	DropdownMenuCheckboxItem,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 
-const props = defineProps<{
-	/** Raw `WHERE` expression, without the keyword. Empty means no filter. */
-	where: string;
-	/** Raw `ORDER BY` expression, without the keyword. */
-	orderBy: string;
-	/** False for a query tab, which has no statement to rebuild. */
-	sortable: boolean;
-	busy?: boolean;
-}>();
+const props = withDefaults(
+	defineProps<{
+		/** Raw `WHERE` expression, without the keyword. Empty means no filter. */
+		where: string;
+		/** Raw `ORDER BY` expression, without the keyword. */
+		orderBy: string;
+		/** False for a query tab, which has no statement to rebuild. */
+		sortable: boolean;
+		busy?: boolean;
+		/** Every column the statement returned. */
+		columns?: string[];
+		/** The subset currently rendered; always a subset of `columns`. */
+		visibleColumns?: string[];
+	}>(),
+	{ columns: () => [], visibleColumns: () => [] },
+);
 
 const emit = defineEmits<{
 	"update:where": [value: string];
@@ -37,7 +47,26 @@ const emit = defineEmits<{
 	/** Fired on Enter, or when the clear button is pressed. */
 	apply: [];
 	rerun: [];
+	"update:visibleColumns": [columns: string[]];
 }>();
+
+const hiddenCount = computed(
+	() => props.columns.length - props.visibleColumns.length,
+);
+
+/**
+ * Toggling never reorders: the emit is rebuilt from `columns`, so the grid keeps
+ * the statement's column order regardless of the click sequence.
+ */
+function toggleColumn(column: string, visible: boolean): void {
+	const next = new Set(props.visibleColumns);
+	if (visible) next.add(column);
+	else next.delete(column);
+	emit(
+		"update:visibleColumns",
+		props.columns.filter((name) => next.has(name)),
+	);
+}
 
 /**
  * The two expressions are edited in local state and pushed up on Enter or on
@@ -101,21 +130,10 @@ function clearOrderBy(): void {
 	orderByDraft.value = "";
 	commit();
 }
-
 </script>
 
 <template>
 	<div class="result-filterbar" data-slot="result-filterbar">
-		<DropdownMenu>
-			<DropdownMenuTrigger as-child>
-				<Button size="micro" variant="ghost">
-					All rows
-				</Button>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align="start">
-				<DropdownMenuItem disabled>All rows</DropdownMenuItem>
-			</DropdownMenuContent>
-		</DropdownMenu>
 
 		<!-- Hidden entirely for a query tab: there is no generated statement to
 		     append a WHERE to, so an enabled box here would be a dead end. -->
@@ -183,6 +201,41 @@ function clearOrderBy(): void {
 		</template>
 
 		<div class="flex-1" />
+
+		<!-- Column visibility lives with the other actions rather than in its own
+		     row: it is per-result state, and a second band above the grid is
+		     height the data does not get back. -->
+		<DropdownMenu v-if="columns.length > 0">
+			<DropdownMenuTrigger as-child>
+				<Button size="micro" variant="ghost">
+					Columns
+					<span
+						v-if="hiddenCount > 0"
+						class="tabular-nums text-muted-foreground"
+					>
+						{{ visibleColumns.length }}/{{ columns.length }}
+					</span>
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end" class="max-h-80 overflow-y-auto">
+				<DropdownMenuLabel>Columns</DropdownMenuLabel>
+				<DropdownMenuCheckboxItem
+					v-for="column in columns"
+					:key="column"
+					:model-value="visibleColumns.includes(column)"
+					@update:model-value="toggleColumn(column, $event)"
+				>
+					{{ column }}
+				</DropdownMenuCheckboxItem>
+				<DropdownMenuSeparator />
+				<DropdownMenuItem
+					:disabled="hiddenCount === 0"
+					@select="emit('update:visibleColumns', [...columns])"
+				>
+					Show all
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
 
 		<Button
 			size="micro"
