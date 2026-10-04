@@ -57,7 +57,6 @@ Phase 9:
 
 Phase 10:
 - [x] Keyboard shortcuts mechanism / settings, nhất là close others, next/previous tab, close tab
-- [x] Nội dung trong toast đang bị cắt đi mất - cần nút expand
 
 Sau:
 - Auto suggest field / table ở editor (code mirror autocomplete logic)

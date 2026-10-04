@@ -261,7 +261,7 @@ onBeforeUnmount(() => {
 		<QuickOpenDialog />
 
 		<Dialog v-model:open="settingsOpen">
-			<DialogContent>
+			<DialogContent class="sm:max-w-md">
 				<DialogHeader>
 					<DialogTitle>Settings</DialogTitle>
 					<DialogDescription>
@@ -270,19 +270,19 @@ onBeforeUnmount(() => {
 				</DialogHeader>
 				<div class="flex items-center justify-between border-t border-border pt-3">
 					<span class="text-sm">Dark theme</span>
-					<Button variant="outline" size="sm" @click="toggle">
+					<Button variant="outline" size="sm" class="shrink-0" @click="toggle">
 						{{ theme === "dark" ? "On" : "Off" }}
 					</Button>
 				</div>
-				<DialogFooter>
-					<Button variant="outline" size="sm" @click="openSnippetsSettings">
+				<!-- The footer is a row by default; two labels of this width
+				     overflow it on a narrow dialog, so it wraps instead of
+				     letting the buttons spill past the rounded edge. -->
+				<DialogFooter class="flex-wrap sm:justify-start">
+					<Button variant="outline" size="sm" class="shrink-0" @click="openSnippetsSettings">
 						SQL snippets…
 					</Button>
-					<Button variant="outline" size="sm" @click="openShortcutSettings">
+					<Button variant="outline" size="sm" class="shrink-0" @click="openShortcutSettings">
 						Keyboard shortcuts…
-					</Button>
-					<Button variant="destructive" @click="tabs.closeAll()">
-						Close all tabs
 					</Button>
 				</DialogFooter>
 			</DialogContent>
