@@ -15,6 +15,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
 	Check,
 	ChevronDown,
+	Database,
 	PlayIcon,
 	SquareIcon,
 } from "lucide-vue-next";
@@ -959,10 +960,21 @@ async function mountEditor(): Promise<void> {
 			if (number === firstLine.number) left = lineStart.left;
 			// A blank line inside the statement contributes only its start x.
 			const content = lastContentOffset(doc, lineFrom, lineTo);
+			// The boundary *after* the last glyph, not the glyph itself.
+			// `coordsAtPos(pos, 1)` resolves to the character starting at
+			// `pos` and reports that character's own box, so asking it for the
+			// last non-blank character and reading `.right` hands back that
+			// character's LEFT edge — the border would then be drawn through the
+			// final glyph, a full character-width short of the text it is meant
+			// to enclose. Asking for the position one past it with `side: -1`
+			// gives the left side of that boundary, which is the right edge of
+			// the character before it: the exact edge after the last glyph.
 			const lineEnd =
-				content === null ? lineStart : view.coordsAtPos(content, 1);
+				content === null
+					? lineStart
+					: view.coordsAtPos(Math.min(content + 1, lineTo), -1);
 			if (!lineEnd) continue;
-			right = Math.max(right, lineEnd.right);
+			right = Math.max(right, lineEnd.left);
 			// A soft-wrapped line keeps filling the content width on its
 			// intermediate visual rows even when its last one is short, so the
 			// statement's right edge is the content edge, not its last glyph.
