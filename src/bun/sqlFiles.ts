@@ -143,6 +143,18 @@ export function matchesFilter(name: string, filter: string): boolean {
 }
 
 /**
+ * Decoding options shared by {@link readFileUtf8} and {@link currentVersion}.
+ * A version token is only comparable when both sides put the same bytes
+ * through the same decode, so the two read paths cannot pick their own.
+ *
+ * `ignoreBOM: true` keeps a UTF-8 BOM as a leading U+FEFF rather than
+ * stripping it; stripping it made every save of a BOM'd file report a
+ * conflict against itself. The decode is non-fatal, so a file that is not
+ * UTF-8 still opens, with its undecodable bytes as U+FFFD.
+ */
+const DECODER_OPTIONS: TextDecoderOptions = { ignoreBOM: true };
+
+/**
  * Content-addressed version token. The caller never interprets it; it is only
  * compared for equality against a later read of the same file.
  */
@@ -293,21 +305,26 @@ export async function readSqlFile(path: string): Promise<SqlFileContent> {
 
 async function readFileUtf8(path: string): Promise<string> {
 	const bytes = await Bun.file(path).arrayBuffer();
-	return new TextDecoder("utf-8").decode(bytes);
+	return new TextDecoder("utf-8", DECODER_OPTIONS).decode(bytes);
 }
 
 /**
- * Hashes a file without holding it in memory, so the conflict check stays
- * cheap even for a file the editor would refuse to open.
+ * Hashes the file's *decoded text* rather than its raw bytes, streaming the
+ * decode so the whole file is never held in memory: the conflict check stays
+ * cheap even for a file the editor would refuse to open, and it stays
+ * comparable with {@link versionFor}, which hashes a string.
  *
  * @returns the version token, or null when the file does not exist.
  */
 async function currentVersion(path: string): Promise<string | null> {
 	const hash = createHash("sha256");
+	const decoder = new TextDecoder("utf-8", DECODER_OPTIONS);
 	try {
 		await new Promise<void>((resolve, reject) => {
 			const stream = createReadStream(path);
-			stream.on("data", (chunk: Uint8Array) => hash.update(chunk));
+			stream.on("data", (chunk: Uint8Array) =>
+				hash.update(decoder.decode(chunk, { stream: true }), "utf8"),
+			);
 			stream.on("error", reject);
 			stream.on("end", resolve);
 		});
@@ -324,6 +341,9 @@ async function currentVersion(path: string): Promise<string | null> {
 			`Cannot read the file to check it for changes: ${message(error)}`,
 		);
 	}
+	// The tail: a multi-byte character may be split across two chunks, so the
+	// last flush has to be hashed too or the token would miss those bytes.
+	hash.update(decoder.decode(), "utf8");
 	return hash.digest("hex");
 }
 
