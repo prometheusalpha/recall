@@ -11,9 +11,9 @@
  * a half-typed clause never reaches the server mid-word.
  */
 import { computed, ref, watch } from "vue";
-import { Filter, RefreshCw, X } from "lucide-vue-next";
+import { ArrowUpDown, Filter } from "lucide-vue-next";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import ClauseSuggestInput from "./ClauseSuggestInput.vue";
 import {
 	DropdownMenu,
 	DropdownMenuCheckboxItem,
@@ -35,10 +35,16 @@ const props = withDefaults(
 		busy?: boolean;
 		/** Every column the statement returned. */
 		columns?: string[];
+		/** Declared SQL type per column, parallel to `columns`. */
+		columnTypes?: string[];
 		/** The subset currently rendered; always a subset of `columns`. */
 		visibleColumns?: string[];
 	}>(),
-	{ columns: () => [], visibleColumns: () => [] },
+	{
+		columns: () => [],
+		visibleColumns: () => [],
+		columnTypes: () => [],
+	},
 );
 
 const emit = defineEmits<{
@@ -46,7 +52,6 @@ const emit = defineEmits<{
 	"update:orderBy": [value: string];
 	/** Fired on Enter, or when the clear button is pressed. */
 	apply: [];
-	rerun: [];
 	"update:visibleColumns": [columns: string[]];
 }>();
 
@@ -75,7 +80,7 @@ function toggleColumn(column: string, visible: boolean): void {
  * Binding them straight to the parent meant every keystroke crossed three
  * component boundaries and re-rendered the whole virtualised grid behind the
  * filter row, which is what made typing stutter. Worse, the value was passed
- * as `value` while `Input` declares `modelValue`, so the text was wiped on
+ * as `value` while the input declared `modelValue`, so the text was wiped on
  * every re-render and appeared to refuse input at all.
  */
 const whereDraft = ref(props.where);
@@ -105,9 +110,6 @@ watch(
 	},
 );
 
-const whereActive = computed(() => whereDraft.value.trim().length > 0);
-const orderByActive = computed(() => orderByDraft.value.trim().length > 0);
-
 /**
  * Pushes the edit up and re-runs. A no-op when the expression is unchanged, so
  * typing and then undoing the characters does not fire a pointless query.
@@ -120,16 +122,6 @@ function commit(): void {
 	emit("update:orderBy", orderByDraft.value);
 	emit("apply");
 }
-
-function clearWhere(): void {
-	whereDraft.value = "";
-	commit();
-}
-
-function clearOrderBy(): void {
-	orderByDraft.value = "";
-	commit();
-}
 </script>
 
 <template>
@@ -138,66 +130,29 @@ function clearOrderBy(): void {
 		<!-- Hidden entirely for a query tab: there is no generated statement to
 		     append a WHERE to, so an enabled box here would be a dead end. -->
 		<template v-if="sortable">
-			<Filter
-				class="size-3 shrink-0"
-				:class="whereActive ? 'text-info' : 'text-muted-foreground'"
-				aria-hidden="true"
-			/>
-			<span
-				class="result-filterbar-label"
-				:class="whereActive ? 'text-info' : 'text-muted-foreground'"
-			>
-				WHERE
-			</span>
-			<Input
+			<ClauseSuggestInput
 				v-model="whereDraft"
-				spellcheck="false"
-				autocomplete="off"
-				autocorrect="off"
-				autocapitalize="off"
-				class="h-6 min-w-0 flex-1 text-xs"
+				label="WHERE"
+				:icon="Filter"
+				accent="text-info"
 				placeholder="name = 'Alice'"
-				aria-label="Filter expression"
-				@keydown.enter.prevent="commit"
+				:columns="columns"
+				:column-types="columnTypes"
+				class="max-w-72"
+				@submit="commit"
 			/>
-			<Button
-				v-if="whereActive"
-				size="icon-xs"
-				variant="ghost"
-				class="size-5 shrink-0"
-				aria-label="Clear filter"
-				@click="clearWhere"
-			>
-				<X aria-hidden="true" />
-			</Button>
 
-			<span
-				class="result-filterbar-label"
-				:class="orderByActive ? 'text-warning' : 'text-muted-foreground'"
-			>
-				ORDER BY
-			</span>
-			<Input
+			<ClauseSuggestInput
 				v-model="orderByDraft"
-				spellcheck="false"
-				autocomplete="off"
-				autocorrect="off"
-				autocapitalize="off"
-				class="h-6 min-w-0 flex-1 text-xs"
+				label="ORDER BY"
+				:icon="ArrowUpDown"
+				accent="text-warning"
 				placeholder="name ASC"
-				aria-label="Sort expression"
-				@keydown.enter.prevent="commit"
+				:columns="columns"
+				:column-types="columnTypes"
+				class="max-w-72"
+				@submit="commit"
 			/>
-			<Button
-				v-if="orderByActive"
-				size="icon-xs"
-				variant="ghost"
-				class="size-5 shrink-0"
-				aria-label="Clear sort"
-				@click="clearOrderBy"
-			>
-				<X aria-hidden="true" />
-			</Button>
 		</template>
 
 		<div class="flex-1" />
@@ -236,15 +191,5 @@ function clearOrderBy(): void {
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
-
-		<Button
-			size="micro"
-			variant="ghost"
-			:disabled="busy"
-			@click="emit('rerun')"
-		>
-			<RefreshCw class="size-3" aria-hidden="true" />
-			Refresh
-		</Button>
 	</div>
 </template>

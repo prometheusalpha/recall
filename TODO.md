@@ -64,11 +64,13 @@ Phase 11:
 - [x] ctrl + shift + up/down key (macos) để sort cột
 - [x] Hover column / index hiện ra tooltip với nội dung k bị cắt mất khi quá dài
 
+Phase 12:
+- [x] Sum selection ở query result / table grid, bỏ qua invalid
+- [x] Auto suggest field / table ở editor (code mirror autocomplete logic, tham khảo dbx)
+- [x] 12.3 Gợi ý cột ở where và order by, sửa giao diện
+- [x] Bỏ nút refresh thay bằng cmd + r
+
 Sau:
-- Sum selection
-- Auto suggest field / table ở editor (code mirror autocomplete logic)
-- Bỏ nút refresh thay bằng cmd + r
 - Màn loading 
-- Gợi ý cột ở where và order by
 - Cơ chế update
 - Redis support

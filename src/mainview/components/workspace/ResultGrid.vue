@@ -30,6 +30,7 @@ import {
 	measureCharWidth,
 	sampleColumnValues,
 } from "../../lib/gridColumnWidth";
+import { sumCells } from "../../lib/cellSum";
 import { toast } from "../../composables/useToast";
 import { errorMessage, rpc } from "../../lib/rpc";
 import {
@@ -539,6 +540,31 @@ const selection = useGridSelection({
 	pageSize: () => pageRows.value,
 });
 
+/**
+ * The sum over the SELECTED RECTANGLE, or `null` when there is no selection —
+ * so the statusbar renders nothing at all rather than a misleading `Sum 0`.
+ * Cells that are not numbers (NULL, text, JSON) are SKIPPED and counted rather
+ * than coerced, and the raw value is read through `cellAt` instead of the
+ * formatted text, because separators or a suffix in a display string would
+ * make a perfectly good number look non-numeric.
+ */
+const selectionSum = computed<ReturnType<typeof sumCells> | null>(() => {
+	const r = selection.range.value;
+	if (!r || selection.selectedCellCount.value === 0) return null;
+	const values: unknown[] = [];
+	for (let row = r.startRow; row <= r.endRow; row++) {
+		for (let col = r.startCol; col <= r.endCol; col++) {
+			// `col` indexes the VISIBLE columns, so it has to be translated
+			// through `columnIndexes` before it can address the result row —
+			// otherwise hiding a column shifts every value to its right.
+			const resultCol = columnIndexes.value[col];
+			if (resultCol === undefined) continue;
+			values.push(cellAt(rows.value[row], resultCol));
+		}
+	}
+	return sumCells(values);
+});
+
 /** The grid owns focus while the user is navigating cells, so arrows move the
  *  cursor instead of scrolling the page. */
 const gridFocused = ref(false);
@@ -581,6 +607,23 @@ function clearSort(): void {
  * so a rebound chord beats the grid's own keys; a held chord is one action.
  */
 const { match } = useShortcuts();
+
+/**
+ * Claims the refresh chord the shortcut table lists but the window dispatcher
+ * never runs. A sort needs a focused cell; a refresh only needs the grid, so
+ * both end at the same `rerun` the old Refresh button emitted.
+ */
+function rerunFromShortcut(event: KeyboardEvent): boolean {
+	if (match(event) !== "result.rerun") return false;
+	// A held chord would re-issue the statement on every key repeat.
+	if (event.repeat) return true;
+	// Claimed before the guard below: the webview must never run its own
+	// reload on a chord the app has already given a meaning to.
+	event.preventDefault();
+	if (props.busy) return true;
+	emit("rerun");
+	return true;
+}
 
 function sortFromShortcut(event: KeyboardEvent): boolean {
 	const id = match(event);
@@ -1201,8 +1244,9 @@ function onKeydown(event: KeyboardEvent): void {
 	if (editing.value) return;
 
 	// Ahead of the accel branches and the `NAVIGATION_KEYS` fallback: a rebound
-	// sort chord has to win here, and `ArrowUp`/`ArrowDown` with a modifier held
+	// chord has to win here, and `ArrowUp`/`ArrowDown` with a modifier held
 	// must not fall through to vertical caret movement.
+	if (rerunFromShortcut(event)) return;
 	if (sortFromShortcut(event)) return;
 
 	const accel = event.metaKey || event.ctrlKey;
@@ -1541,12 +1585,12 @@ function rowKey(_row: unknown, index: number): number {
 				:sortable="filterable"
 				:busy="busy"
 				:columns="result.columns"
+				:column-types="result.columnTypes"
 				:visible-columns="columns"
 				@update:where="(value) => emit('update:where', value)"
 				@update:order-by="(value) => emit('update:orderBy', value)"
 				@update:visible-columns="onVisibleColumnsChange"
 				@apply="emit('applyFilter')"
-				@rerun="emit('rerun')"
 			/>
 
 		<!--
@@ -1845,6 +1889,19 @@ function rowKey(_row: unknown, index: number): number {
 						class="shrink-0 tabular-nums"
 					>
 						{{ selection.selectedCellCount.value }} cells selected
+					</span>
+					<!-- The sum is over the SELECTED RECTANGLE only, and
+					     non-numeric cells are skipped, never coerced — so the
+					     skipped count is stated: a total that quietly dropped
+					     a column of digits-as-text would read as arithmetic. -->
+					<span
+						v-if="selectionSum !== null"
+						class="shrink-0 tabular-nums"
+					>
+						Sum {{ selectionSum.sum.toLocaleString(undefined, { maximumFractionDigits: 6 }) }}
+						<template v-if="selectionSum.skipped > 0">
+							· <span class="text-muted-foreground">{{ selectionSum.skipped }} skipped</span>
+						</template>
 					</span>
 					<span v-if="result.truncated" class="shrink-0 text-warning">
 						truncated

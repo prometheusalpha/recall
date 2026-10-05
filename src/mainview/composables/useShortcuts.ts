@@ -38,7 +38,8 @@ export type CommandId =
 	| "tab.prev"
 	| "quickOpen.toggle"
 	| "result.sortAsc"
-	| "result.sortDesc";
+	| "result.sortDesc"
+	| "result.rerun";
 
 export interface CommandDefinition {
 	id: CommandId;
@@ -103,30 +104,17 @@ export const SHORTCUT_COMMANDS: CommandDefinition[] = [
 		group: "View",
 		defaultBinding: accel("p"),
 	},
-
 	/*
-	 * Sort gestures for the result grid.
+	 * Grid-owned chords: the two sorts (which spell out real Control on every
+	 * platform, so `accel` would hand macOS ⌘⇧↑) plus the refresh.
 	 *
-	 * These two are the one deliberate exception to the accel rule above: the
-	 * user asked for real Control on every platform, so `ctrl` is spelled out
-	 * instead of being derived from the platform, and `meta` is explicitly
-	 * false. Calling `accel()` here would hand macOS ⌘⇧↑ / ⌘⇧↓ and quietly
-	 * collide with the Cmd chords the rest of the app already owns.
-	 *
-	 * Both chords stay on the table — so they are rebindable and printable in
-	 * the settings dialog — but deliberately *off* the window dispatcher's
-	 * `runCommand` path that drives every other command here: sorting needs a
-	 * focused cell, and there is no such thing when the sidebar, the editor or
-	 * the files panel holds focus. `ResultGrid.vue` claims the chord from its
-	 * own `onKeydown` instead, and because that handler runs before the window
-	 * dispatcher sees the event and marks it `defaultPrevented`, there is still
-	 * exactly one path and no second listener. A press while no grid holds
-	 * focus resolves to one of these ids and finds no registered
-	 * implementation, so it does nothing.
-	 *
-	 * `match` returns the first match in table order, and both chords are
-	 * distinct from every accel-built entry above on all four modifier flags,
-	 * so neither can shadow an existing command.
+	 * They stay on the table so they are rebindable and printable in the
+	 * settings dialog, but deliberately *off* the window dispatcher's
+	 * `runCommand` path that drives every other command here: a sort needs a
+	 * focused cell and a refresh belongs to the grid that owns the result.
+	 * `ResultGrid.vue` claims them from its own `onKeydown`, which runs first
+	 * and marks the event `defaultPrevented`, so there is still one path; with
+	 * no grid focused they resolve to ids that have no implementation.
 	 */
 	{
 		id: "result.sortAsc",
@@ -151,6 +139,12 @@ export const SHORTCUT_COMMANDS: CommandDefinition[] = [
 			shift: true,
 			alt: false,
 		},
+	},
+	{
+		id: "result.rerun",
+		label: "Refresh result",
+		group: "Result grid",
+		defaultBinding: accel("r"),
 	},
 ];
 

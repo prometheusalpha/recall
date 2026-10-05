@@ -63,6 +63,12 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { snippetCompletionSource } from "../editor/SqlCompletionSource";
+import {
+	schemaCompletionSource,
+	type SchemaCompletionContext,
+} from "../editor/SqlSchemaCompletionSource";
+import { useSchemaCatalog } from "../../composables/useSchemaCatalog";
+import { useTableCatalog } from "../../composables/useTableCatalog";
 
 /* -------------------------------------------------------------------------
  * Lazy runtime
@@ -291,6 +297,85 @@ const dbType = computed<DatabaseType>(() => {
 		: undefined;
 	return config?.dbType ?? "postgres";
 });
+
+const tableCatalog = useTableCatalog();
+const schemaCatalog = useSchemaCatalog();
+
+/**
+ * Synchronous schema view for the completion source: the active tab's tables
+ * from the session catalog, and columns read from the cache only.
+ *
+ * The table catalog is a Map, not a reactive array, so it is walked through a
+ * visitor rather than copied per keystroke — and the async column fetch belongs
+ * to the watcher below, so a keystroke never waits on the wire.
+ */
+function schemaContext(): SchemaCompletionContext {
+	const tab = activeTab.value;
+	const connectionId = tab?.connectionId ?? "";
+	const database = tab?.database ?? "";
+	const schema = tab?.schema ?? "";
+	const tables: string[] = [];
+	const seen = new Set<string>();
+	if (connectionId) {
+		tableCatalog.eachDiscoveredTable(connectionId, (cached) => {
+			if (cached.database !== database) return;
+			if (schema && cached.schema && cached.schema !== schema) return;
+			for (const entry of cached.tables) {
+				const key = entry.name.toLowerCase();
+				if (seen.has(key)) continue;
+				seen.add(key);
+				tables.push(entry.name);
+			}
+		});
+	}
+	return {
+		tables,
+		activeTable: tab?.table || undefined,
+		columnsFor: (table) => {
+			if (!connectionId || !database || !table) return [];
+			return schemaCatalog.cachedColumns({
+				connectionId,
+				database,
+				schema,
+				table,
+			});
+		},
+	};
+}
+
+// Table names come from the Quick Open catalog, which only fills on demand;
+// asking once per tab keeps `FROM <tab>` populated without a hot loop.
+watch(
+	() => {
+		const tab = activeTab.value;
+		return tab?.connectionId ? `${tab.connectionId}` : "";
+	},
+	(connectionId) => {
+		if (connectionId) void tableCatalog.loadTables(connectionId);
+	},
+	{ immediate: true },
+);
+
+// The column fetch is here rather than in the source: completion has to stay
+// synchronous, and a result that arrives mid-typing is picked up by `version`.
+watch(
+	() => {
+		const tab = activeTab.value;
+		if (!tab?.connectionId || !tab.database || !tab.table) return "";
+		return `${tab.connectionId}|${tab.database}|${tab.schema}|${tab.table}`;
+	},
+	() => {
+		const tab = activeTab.value;
+		if (!tab?.connectionId || !tab.database || !tab.table) return;
+		void schemaCatalog.columnsFor({
+			connectionId: tab.connectionId,
+			database: tab.database,
+			schema: tab.schema,
+			table: tab.table,
+		});
+	},
+	{ immediate: true },
+);
 
 function run(): void {
 	const id = activeTabId.value;
@@ -1196,14 +1281,24 @@ async function mountEditor(): Promise<void> {
 				// Snippets are offered by prefix and never expand on their own:
 				// the user picks an entry from the popup, and only then does
 				// `snippetCompletion` own the `${n}` tab-stop session.
-				autocomplete.autocompletion({
-					override: [
-						snippetCompletionSource(
-							() => snippetsStore.enabledSnippets,
-							autocomplete.snippetCompletion,
-						),
-					],
-				}),
+
+				// `override` REPLACES CodeMirror's stock SQL source, so both
+				// providers must live in this one array — a source registered
+				// anywhere else is silently discarded. The extension is lifted
+				// with `Prec` because `override` takes sources, not extensions;
+				// the array order then settles an exact-prefix tie: a snippet
+				// mnemonic is deliberate, a column name is a guess.
+				S.Prec.highest(
+					autocomplete.autocompletion({
+						override: [
+							snippetCompletionSource(
+								() => snippetsStore.enabledSnippets,
+								autocomplete.snippetCompletion,
+							),
+							schemaCompletionSource(schemaContext),
+						],
+					}),
+				),
 				search.search({ top: true }),
 				search.highlightSelectionMatches(),
 				V.EditorView.updateListener.of((update) => {
