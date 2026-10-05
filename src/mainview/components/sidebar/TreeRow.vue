@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { ChevronRight, Loader } from "lucide-vue-next";
 import type { Component } from "vue";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 /**
  * One row of the connection tree. Presentational only: the parent owns
@@ -8,6 +10,20 @@ import type { Component } from "vue";
  *
  * Height comes from the prewritten `.tree-row` (28px) so it matches
  * `RecycleScroller`'s `item-size`; indentation is 16px per depth level.
+ *
+ * The label is truncated to the sidebar's width, so a long table or column
+ * name is unreadable. It used to fall back on a native `title` attribute,
+ * which WebKit renders as a single line and clips at the screen edge — the
+ * one case where the user most wants the rest of the string is the case where
+ * they got the least of it. The shadcn `TooltipContent` wraps instead.
+ *
+ * The trigger wraps the *label*, not the row div. The row div is the
+ * interaction surface, and `TooltipTrigger` binds `click`, `focus`,
+ * `pointerdown` and `blur` on whatever it wraps; parking a trigger on the row
+ * would mean every activation and every keyboard focus of the tree also drove
+ * tooltip state on the element the tree itself listens to. The label span is
+ * where the truncation happens, so it is also the only element whose full text
+ * the tooltip is about.
  */
 const props = withDefaults(
 	defineProps<{
@@ -27,7 +43,12 @@ const props = withDefaults(
 		connectedTitle?: string;
 		/** Small pill after the label, e.g. a column's nullability. */
 		badge?: { text: string; tone: "warning" | "muted" };
-		/** Row tooltip, for details that do not fit in the label. */
+		/**
+		 * Full text for the hover tooltip, shown when the label is cut off or
+		 * carries detail beside it (a column comment, an index's key columns).
+		 * Rendered through `TooltipContent`, never as a native `title`: the row
+		 * div deliberately carries none, or the two would compete on one hover.
+		 */
 		title?: string;
 		/**
 		 * Whether a right-click on this row is ours to handle. Off by default so
@@ -37,6 +58,23 @@ const props = withDefaults(
 	}>(),
 	{ selected: false, loading: false, contextable: false },
 );
+
+/**
+ * The tooltip body, or `undefined` when this row has nothing to say.
+ *
+ * The tree is virtualised, and every row that mounted a `Tooltip` would build
+ * a `TooltipRoot` context, a popper anchor, a `TooltipTrigger` with five
+ * pointer/focus listeners and a `TooltipContent` portal. `disabled` builds
+ * all of that too, so the branch is chosen in the template instead: a row with
+ * no title renders the bare label and no tooltip machinery at all.
+ *
+ * A whitespace-only `title` collapses to `undefined` for the same reason — an
+ * empty tooltip is worse than none, since it costs the same context.
+ */
+const tooltipText = computed(() => {
+	const text = props.title?.trim();
+	return text ? text : undefined;
+});
 
 const emit = defineEmits<{
 	toggle: [];
@@ -65,7 +103,6 @@ function onContextMenu(event: MouseEvent): void {
 		:data-selected="selected ? 'true' : undefined"
 		:data-loading="loading ? 'true' : undefined"
 		:style="{ paddingLeft: `calc(0.5rem + ${depth} * 16px)` }"
-		:title="title"
 		@click="emit('activate')"
 		@contextmenu="onContextMenu"
 		@keydown.enter.prevent="emit('activate')"
@@ -102,7 +139,18 @@ function onContextMenu(event: MouseEvent): void {
 			aria-hidden="true"
 		/>
 
-		<span class="min-w-0 flex-1 truncate">{{ label }}</span>
+		<!-- `as-child` means no wrapper element: the trigger's props and the five
+		     listeners land on this span, so the row's flex arithmetic and the
+		     fixed 28px height are untouched. -->
+		<Tooltip v-if="tooltipText">
+			<TooltipTrigger as-child>
+				<span class="min-w-0 flex-1 truncate">{{ label }}</span>
+			</TooltipTrigger>
+			<!-- The primitive's own `max-w-xs` wraps a long identifier into four
+			     short lines; the row has the sidebar's full width to spend. -->
+			<TooltipContent class="max-w-lg">{{ tooltipText }}</TooltipContent>
+		</Tooltip>
+		<span v-else class="min-w-0 flex-1 truncate">{{ label }}</span>
 
 		<span
 			v-if="childCount"

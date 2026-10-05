@@ -1,19 +1,14 @@
 /**
  * Quick Open: one ranked list of tables, SQL files and connections.
  *
- * The palette's state is module-level, like the toast state, and deliberately
- * so. The palette is opened from the window shell (a Cmd/Ctrl+P listener) and
- * rendered by a dialog component, so the two cannot share a component
- * instance — but they must share the same `open` flag and the same query. A
- * singleton here is what makes that work without a provider in the tree.
- *
- * The stores are *not* taken at module scope: this module is imported before
- * `createApp(...).use(createPinia())` runs, so a module-level `useStore()` would
- * have no active pinia. Each `useQuickOpen()` call resolves them instead, and
- * every call gets the same underlying stores.
+ * The state is module-level like the toast state: the window shell (Cmd/Ctrl+P)
+ * and the dialog cannot share a component instance and must still share `open`
+ * and `query`. The stores are *not* taken at module scope — this file is
+ * imported before `createApp().use(createPinia())` runs. Search spans *every*
+ * connection, not the active one: `activeId` is written only inside `connect()`,
+ * so an active-only palette had nothing to rank.
  */
 import { computed, ref, watch, type ComputedRef, type Ref } from "vue";
-import type { TableInfo } from "../../shared/types";
 import type { FileDatasource, SqlFileNode } from "../../shared/sqlFile";
 import { useConnectionsStore } from "../stores/connections";
 import { useSqlFilesStore } from "../stores/sqlFiles";
@@ -22,6 +17,7 @@ import { resolveFileDatasource } from "../lib/fileDatasource";
 import { toast } from "./useToast";
 import { errorMessage } from "../lib/rpc";
 import { matchFuzzy } from "../lib/fuzzy";
+import { useTableCatalog } from "./useTableCatalog";
 
 export type QuickOpenItem =
 	| {
@@ -52,18 +48,6 @@ export type QuickOpenItem =
 			connectionId: string;
 	  };
 
-/**
- * Tables already fetched, per connection. A connection's table list is fixed
- * for the session, so an entry is never evicted; a failed fetch stores nothing
- * and is retried on the next palette open.
- */
-const tableCache = new Map<string, TableInfo[]>();
-/** Connections with a fetch in flight, so a burst of keystrokes is one query. */
-const inFlight = new Set<string>();
-/** Bumped on every completed fetch. The cache is a plain Map and so is not
- * reactive; this is the one dependency `items` needs to watch instead. */
-const cacheVersion = ref(0);
-
 const open = ref(false);
 const query = ref("");
 
@@ -73,12 +57,44 @@ let watchingOpen = false;
 /** Rows rendered at once. Beyond this the list is a scrollbar, not a list. */
 const MAX_RESULTS = 50;
 
-/** Order the kinds are shown in when scores tie. */
+/**
+ * How long a keystroke burst is allowed to run before the palette asks every
+ * connection for its tables. Long enough to swallow a fast typist's whole word,
+ * short enough that the first results land while they are still typing — and
+ * this bounds how often a fan-out may open a fresh socket, which is what it now
+ * costs for a profile that has never been connected.
+ */
+const FAN_OUT_DEBOUNCE_MS = 200;
+
+/**
+ * The pending fan-out timer, module-level because the palette has exactly one
+ * query, so it has exactly one pending fan-out. A keystroke replaces the timer
+ * rather than queueing behind it, which is what keeps N connections × M
+ * keystrokes of `listTables` from happening.
+ */
+let fanOutTimer: number | undefined;
+
+/**
+ * True from the keystroke that schedules a fan-out until every connection it
+ * asked has answered. Without it the palette renders its "no matches" row
+ * through the whole debounce window and again through every slow connection,
+ * which reads as "this table does not exist" at exactly the moment the user is
+ * deciding whether to keep typing.
+ */
+const searching = ref(false);
+
+/**
+ * Order the kinds are shown in when scores tie. {@link KINDS} is the same order
+ * as an array, for the blank-query interleave that consumes it.
+ */
 const KIND_ORDER: Record<QuickOpenItem["kind"], number> = {
 	table: 0,
 	file: 1,
 	connection: 2,
 };
+
+/** The kinds, in {@link KIND_ORDER} order. */
+const KINDS: QuickOpenItem["kind"][] = ["table", "file", "connection"];
 
 /** Depth-first flatten of one folder's scan into its non-directory nodes. */
 function flatten(nodes: SqlFileNode[], into: SqlFileNode[]): void {
@@ -88,12 +104,15 @@ function flatten(nodes: SqlFileNode[], into: SqlFileNode[]): void {
 	}
 }
 
-/** What {@link useQuickOpen} hands back: the shared palette state and its
- * three actions. */
+/**
+ * What {@link useQuickOpen} hands back: the shared palette state and its three
+ * actions. Unchanged by the split — the dialog component consumes exactly this.
+ */
 export interface QuickOpenPalette {
 	open: Ref<boolean>;
 	query: Ref<string>;
 	items: ComputedRef<QuickOpenItem[]>;
+	searching: Ref<boolean>;
 	loadTables(connectionId: string): Promise<void>;
 	activate(item: QuickOpenItem): Promise<void>;
 	close(): void;
@@ -103,11 +122,12 @@ export function useQuickOpen(): QuickOpenPalette {
 	const connections = useConnectionsStore();
 	const sqlFiles = useSqlFilesStore();
 	const tabs = useTabsStore();
+	const catalog = useTableCatalog();
 
 	/**
 	 * The datasource a file opens against: its binding when that binding's
-	 * connection still exists, otherwise the active connection's own database
-	 * and schema. Null when there is no connection at all — the file is then not
+	 * connection still exists, otherwise the active connection's own database and
+	 * schema. Null when there is no connection at all — the file is then not
 	 * listed, because there would be nothing to run it against.
 	 */
 	function datasourceFor(path: string): FileDatasource | null {
@@ -122,41 +142,60 @@ export function useQuickOpen(): QuickOpenPalette {
 	}
 
 	/**
-	 * Fetches one connection's table list into the cache. Never rejects: a
-	 * connection that is down, unreachable or not permitted is skipped, so one
-	 * bad profile cannot empty the palette for the others.
+	 * Asks *every* configured connection to discover itself and holds
+	 * {@link searching} up until they have all answered. `loadTables` skips the
+	 * ones already discovered or in flight, but each undiscovered connection is a
+	 * real round trip — hence the debounce.
+	 *
+	 * This is the palette's only eager connection opener, reached only from a
+	 * keystroke. Deliberate: a bare open would put a socket to every server in
+	 * the sidebar for a user who only wanted to look.
 	 */
-	async function loadTables(connectionId: string): Promise<void> {
-		if (tableCache.has(connectionId) || inFlight.has(connectionId)) return;
-		const config = connections.configs.find((entry) => entry.id === connectionId);
-		if (!config) return;
-
-		inFlight.add(connectionId);
-		try {
-			tableCache.set(
-				connectionId,
-				await connections.listTables({
-					connectionId,
-					database: config.database,
-					// Postgres names a schema; MySQL's schema *is* its database.
-					schema:
-						config.dbType === "postgres" ? config.defaultSchema : config.database,
-					filter: "",
-				}),
-			);
-		} catch {
-			// Left uncached on purpose: the next palette open retries it, which
-			// is what a user who just fixed their VPN expects.
-		} finally {
-			inFlight.delete(connectionId);
-			cacheVersion.value += 1;
+	function fanOutTables(): void {
+		const pending = connections.configs.map((config) =>
+			catalog.loadTables(config.id),
+		);
+		if (pending.length === 0) {
+			searching.value = false;
+			return;
 		}
+		// Every `loadTables` resolves — a dead connection is recorded and skipped
+		// inside it — so one unreachable profile cannot leave the palette
+		// "searching" forever over rows that already arrived.
+		void Promise.all(pending).then(() => {
+			searching.value = false;
+			catalog.reportFanOut();
+		});
 	}
 
-	/** Hides the palette and clears the query, so the next open starts fresh. */
+	/**
+	 * Debounces {@link fanOutTables} to one call per pause in typing. A later
+	 * keystroke cancels the pending timer outright — the fan-out is "reconsider
+	 * after the user stops", not "run once per character".
+	 */
+	function scheduleFanOut(): void {
+		clearTimeout(fanOutTimer);
+		searching.value = true;
+		// `window.setTimeout`, not the bare global: this module is renderer-only,
+		// and the ambient `@types/node` overload of the bare global returns a
+		// different handle type than the one stored above.
+		fanOutTimer = window.setTimeout(() => {
+			fanOutTimer = undefined;
+			fanOutTables();
+		}, FAN_OUT_DEBOUNCE_MS);
+	}
+
+	/**
+	 * Hides the palette and clears the query, so the next open starts fresh. The
+	 * pending fan-out is dropped with it: nobody is looking at the rows it would
+	 * produce, and the next open re-arms the timer anyway.
+	 */
 	function close(): void {
 		open.value = false;
 		query.value = "";
+		clearTimeout(fanOutTimer);
+		fanOutTimer = undefined;
+		searching.value = false;
 	}
 
 	/** Opens whatever the picked row points at, then closes the palette. */
@@ -193,7 +232,7 @@ export function useQuickOpen(): QuickOpenPalette {
 		close();
 	}
 
-	/** Every configured connection and every cached table, as palette rows. */
+	/** Every configured connection and every discovered table, as palette rows. */
 	function connectionRows(): QuickOpenItem[] {
 		const rows: QuickOpenItem[] = connections.configs.map((config) => ({
 			kind: "connection",
@@ -203,26 +242,32 @@ export function useQuickOpen(): QuickOpenPalette {
 			connectionId: config.id,
 		}));
 		for (const config of connections.configs) {
-			const schema =
-				config.dbType === "postgres" ? config.defaultSchema : config.database;
-			for (const entry of tableCache.get(config.id) ?? []) {
-				rows.push({
-					kind: "table",
-					id: `${config.id} ${config.database} ${schema} ${entry.name}`,
-					label: entry.name,
-					description: `${config.name} / ${config.database} / ${schema}`,
-					connectionId: config.id,
-					database: config.database,
-					schema,
-					table: entry.name,
-				});
-			}
+			catalog.eachDiscoveredTable(config.id, (cached) => {
+				for (const entry of cached.tables) {
+					rows.push({
+						kind: "table",
+						id: `${config.id} ${cached.database} ${cached.schema} ${entry.name}`,
+						label: entry.name,
+						description: `${config.name} / ${cached.database} / ${cached.schema}`,
+						connectionId: config.id,
+						// The pair the fetch *ran* in, not the profile's current one:
+						// a row claiming any other database would open a table that
+						// is not there. It is now a found pair rather than a guess,
+						// which is also what tells two same-named tables apart.
+						database: cached.database,
+						schema: cached.schema,
+						table: entry.name,
+					});
+				}
+			});
 		}
 		return rows;
 	}
 
-	/** Every opened `.sql` file, as palette rows. Non-SQL files are skipped
-	 * even when the folder's filter is widened: the palette is for SQL. */
+	/**
+	 * Every opened `.sql` file, as palette rows. Non-SQL files are skipped even
+	 * when the folder's filter is widened: the palette is for SQL.
+	 */
 	function fileRows(): QuickOpenItem[] {
 		const nodes: SqlFileNode[] = [];
 		for (const folder of sqlFiles.folders) {
@@ -252,16 +297,43 @@ export function useQuickOpen(): QuickOpenPalette {
 		KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.label.localeCompare(b.label);
 
 	/**
-	 * The ranked result list. A blank query lists everything by kind, so opening
-	 * the palette is never a dead end; anything else is filtered and scored by
-	 * {@link matchFuzzy}. A table is matched on its own name and a file on its
-	 * base name — both are the row's `label`.
+	 * Blank-query ordering: one row of each kind in turn, then the next. The plain
+	 * kind-then-label sort puts *every* connection ahead of *every* table, so a
+	 * user with more than {@link MAX_RESULTS} profiles is shown no tables at all —
+	 * and with a blank query there is no hit to rank them by, which is the whole
+	 * point of opening the palette. Tables come first here by {@link KIND_ORDER},
+	 * so the crowded-out case lands on files rather than on the tables the
+	 * fan-out exists to surface.
+	 */
+	function interleaveKinds(rows: QuickOpenItem[]): QuickOpenItem[] {
+		const queues: QuickOpenItem[][] = KINDS.map(() => []);
+		for (const row of rows) queues[KIND_ORDER[row.kind]].push(row);
+		for (const queue of queues) queue.sort(byKindThenLabel);
+		const out: QuickOpenItem[] = [];
+		while (out.length < MAX_RESULTS) {
+			// A blank query opens on "everything", so stop as soon as a full
+			// round produced nothing rather than looping over empty queues.
+			const queue = queues.find((candidate) => candidate.length > 0);
+			if (!queue) break;
+			const row = queue.shift();
+			if (row) out.push(row);
+		}
+		return out;
+	}
+
+	/**
+	 * The ranked result list. A blank query lists everything, interleaved by kind,
+	 * so opening the palette is never a dead end and never shows only
+	 * connections; anything else is filtered and scored by {@link matchFuzzy}. A
+	 * table is matched on its own name and a file on its base name — both are the
+	 * row's `label`. The catalog's version counter is the reactive dependency
+	 * standing in for a reactive Map.
 	 */
 	const items = computed<QuickOpenItem[]>(() => {
-		void cacheVersion.value;
+		void catalog.version.value;
 		const all = [...connectionRows(), ...fileRows()];
 		const needle = query.value.trim();
-		if (!needle) return all.sort(byKindThenLabel).slice(0, MAX_RESULTS);
+		if (!needle) return interleaveKinds(all);
 
 		const scored: { item: QuickOpenItem; score: number }[] = [];
 		for (const item of all) {
@@ -274,12 +346,35 @@ export function useQuickOpen(): QuickOpenPalette {
 
 	if (!watchingOpen) {
 		watchingOpen = true;
-		// Prime the active connection's tables as the palette opens, so the
-		// first keystroke already has something to rank.
+		// A bare palette open touches the active connection and nothing else. That
+		// is safe to do eagerly because `activeId` is written in exactly one
+		// place — inside `connect()` — so a non-null id means that profile is
+		// already up and `loadTables` opens no socket. On a fresh launch
+		// `activeId` is null and even this does not run. Opening the palette then
+		// never talks to a server the user has not already talked to; it only
+		// makes the first keystroke's ranking immediate.
 		watch(open, (isOpen) => {
-			if (isOpen && connections.activeId) void loadTables(connections.activeId);
+			if (isOpen && connections.activeId) void catalog.loadTables(connections.activeId);
+		});
+		// A non-empty query is what reaches the connections the user has not
+		// connected to, and connecting them is its cost — so it is what gates it.
+		// A keystroke is a claim that the answer is somewhere, and the only moment
+		// that justifies a socket to every saved profile. It watches `query` rather
+		// than the open event for the same reason: the active connection primed
+		// above is not the one holding the table whose name is being typed.
+		watch(query, (value) => {
+			if (!open.value || !value.trim()) return;
+			scheduleFanOut();
 		});
 	}
 
-	return { open, query, items, loadTables, activate, close };
+	return {
+		open,
+		query,
+		items,
+		searching,
+		loadTables: catalog.loadTables,
+		activate,
+		close,
+	};
 }

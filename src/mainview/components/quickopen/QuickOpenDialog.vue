@@ -18,7 +18,7 @@ import { Input } from "../ui/input";
  * connections; picking a row opens it. State lives in the composable, not here,
  * so the window shell can open the palette without owning this component.
  */
-const { open, query, items, activate, close } = useQuickOpen();
+const { open, query, items, searching, activate, close } = useQuickOpen();
 
 /** Index into `items` of the row Enter would pick. */
 const highlighted = ref(0);
@@ -119,6 +119,9 @@ function onKeydown(event: KeyboardEvent): void {
 
 			<div class="flex items-center gap-2 border-b border-border px-3 py-2">
 				<Search class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+				<!-- An identifier is typed here, never prose: the squiggles
+				     and autocapitalise only fight the query, and the fuzzy
+				     rank reads the raw string back out of the box. -->
 				<Input
 					v-model="query"
 					role="combobox"
@@ -130,6 +133,9 @@ function onKeydown(event: KeyboardEvent): void {
 						highlightedItem ? `quickopen-row-${highlighted}` : undefined
 					"
 					autofocus
+					spellcheck="false"
+					autocapitalize="off"
+					autocorrect="off"
 					placeholder="Search tables, files and connections…"
 					class="h-7 border-0 px-1 py-0 focus-visible:ring-0"
 					@keydown="onKeydown"
@@ -147,7 +153,7 @@ function onKeydown(event: KeyboardEvent): void {
 					v-if="items.length === 0"
 					class="px-3 py-6 text-center text-sm text-muted-foreground"
 				>
-					No matches
+					{{ searching ? "Searching every connection…" : "No matches" }}
 				</p>
 
 				<div

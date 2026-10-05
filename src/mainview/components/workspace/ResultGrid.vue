@@ -1,18 +1,13 @@
 <script setup lang="ts">
 /**
- * Virtualised result grid with rectangular cell selection and inline editing.
- *
- * Hand-rolled on `vue-virtual-scroller` — no grid library. The header row and
- * the body share one horizontal scroll container, and because every cell has an
- * explicit pixel width the columns stay aligned while scrolling.
- *
- * Selection is addressed by absolute result indices, never by what the scroller
- * happens to have in the DOM: a range can reach far past the rendered rows, and
- * both copy and edit have to work on values that were never painted.
- *
- * A failed statement is data, not an exception: the query store writes a
- * one-column `Error` result, and `result.error` is set, so the failure renders
- * as a centred panel in the same place the rows would have been.
+ * Virtualised result grid with rectangular cell selection and inline editing,
+ * hand-rolled on `vue-virtual-scroller` — no grid library. Header and body
+ * share one horizontal scroll container, and explicit pixel cell widths keep
+ * the columns aligned. Selection is addressed by absolute result indices,
+ * never by what the scroller has in the DOM: a range reaches far past the
+ * rendered rows, so copy and edit must work on values never painted.
+ * Hover text is the tooltip primitive, not a native `title` (clipped at the
+ * window edge); a failure is data, so `result.error` renders it centred.
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { CSSProperties } from "vue";
@@ -41,6 +36,7 @@ import {
 	useGridSelection,
 	type GridNavigationDirection,
 } from "../../composables/useGridSelection";
+import { useShortcuts } from "../../composables/useShortcuts";
 import { Button } from "../ui/button";
 import {
 	DropdownMenuCheckboxItem,
@@ -51,6 +47,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import ResultFilterBar from "./ResultFilterBar.vue";
 
 const ROW_HEIGHT = 26;
@@ -300,14 +297,11 @@ const headerScrollEl = ref<HTMLElement | null>(null);
  * The element that actually scrolls.
  *
  * `RecycleScroller` is the scroller: it carries `overflow-y: auto` itself, so
- * `grid-body` around it never overflows and never scrolls. The rows hang off
- * the scroller's item wrapper, which is pinned to `width: 100%` of the
- * viewport — without the width override below, wide columns would spill out of
- * that wrapper instead of giving the scroller a horizontal range, and the grid
- * would lose horizontal scrolling altogether.
- *
- * Reading it off the component's root keeps `scrollTop`/`scrollLeft` and the
- * header pairing pointed at the one element that has a range to scroll.
+ * `grid-body` around it never scrolls. Its item wrapper is pinned to
+ * `width: 100%` — without that override wide columns spill out of the wrapper
+ * instead of giving the scroller a horizontal range at all. Reading the node
+ * off the component's root keeps `scrollLeft` and the header pairing on the
+ * one element that has a range to scroll.
  */
 function scrollerNode(): HTMLElement | null {
 	return (recycleRef.value?.$el as HTMLElement | undefined) ?? null;
@@ -317,14 +311,10 @@ function scrollerNode(): HTMLElement | null {
  * Keeps the header aligned with the body.
  *
  * Assignment is guarded because setting `scrollLeft` fires a scroll event on
- * the header too: without the equality check the two would push each other
- * forever. The guard is what makes the pairing one-way per gesture rather than
- * a feedback loop.
- *
- * The value is clamped to the header's own range. The two scrollers are sized
- * to travel the same distance, but a layout that lands between a gutter
- * measurement and a scroll can leave one of them shorter, and an
- * unclamped offset is how the two would start to disagree.
+ * the header too: without the equality check the two push each other forever,
+ * so the guard makes the pairing one-way per gesture. The value is clamped to
+ * the header's own range, because a layout landing between a gutter
+ * measurement and a scroll can leave one scroller shorter than the other.
  */
 function syncHeaderScroll(): void {
 	const body = scrollerNode();
@@ -359,14 +349,12 @@ function clampScrollLeft(el: HTMLElement, value: number): number {
 
 /**
  * The body's vertical scrollbar takes width out of its client box, so the body
- * travels further right than the header does and the pairing above clamps the
- * header short of it — leaving the last column's header sitting to the left of
- * its column. Widening the header's content by the same gutter gives it the
- * body's horizontal range instead of its own narrower one.
+ * travels further right than the header and the pairing clamps the header short
+ * of it — leaving the last column's header to the left of its column. Widening
+ * the header's content by the same gutter gives it the body's horizontal range.
  *
- * Overlay scrollbars report no gutter, so this settles at 0 on macOS and does
- * nothing; on a platform with classic scrollbars it is the whole difference
- * between aligned and not at the far right.
+ * Overlay scrollbars report no gutter, so this settles at 0 on macOS; on a
+ * platform with classic scrollbars it is the whole difference at the far right.
  */
 const scrollbarGutter = ref(0);
 
@@ -415,13 +403,11 @@ watch(
 /**
  * Manual column widths, keyed by column name.
  *
- * **Presence of the key is the whole contract**: a key here means "the user
- * sized this", and its value is the width to use — there is no separate
- * user-sized flag, because the only two things that write here are a drag and
- * the re-fit double-click. An absent key means the column auto-fits.
- *
- * Keying by name rather than index is what lets a width survive hiding a
- * different column, reordering, and re-running the statement.
+ * **Presence of the key is the whole contract**: a key means "the user sized
+ * this", and its value is the width to use — there is no separate user-sized
+ * flag, because only a drag and the re-fit double-click write here. An absent
+ * key auto-fits. Keying by name rather than index is what lets a width survive
+ * hiding a different column, reordering, and re-running the statement.
  */
 const columnWidths = ref<Record<string, number>>({});
 
@@ -435,17 +421,14 @@ const columnWidths = ref<Record<string, number>>({});
 const charWidth = ref(GRID_CHAR_WIDTH);
 
 /**
- * Fitted width per visible column, keyed by name like `columnWidths`.
+ * Fitted width per visible column, keyed by name like `columnWidths`. Sampling
+ * reads the RESULT column index, never the visible one: once a column is
+ * hidden the visible indexes slide left, and measuring through them would size
+ * each remaining column to its neighbour's values.
  *
- * Sampling reads the RESULT column index, never the visible one: once a column
- * is hidden the visible indexes slide left, and measuring through them would
- * quietly size each remaining column to its neighbour's values.
- *
- * Dependencies are `props.result`, `columns`, `columnIndexes` and `charWidth`,
- * and nothing else — the sample is the expensive half, so it must not re-run on
- * a scroll or a selection change. `charWidth` is a dependency despite reading
- * like a constant: without it the post-`fonts.ready` re-measure would move the
- * number and no width would follow.
+ * Dependencies are exactly `props.result`, `columns`, `columnIndexes` and
+ * `charWidth`: the sample is the expensive half, so a scroll or a selection
+ * change must not re-run it, and `charWidth` carries the font re-measure.
  */
 const autoColumnWidths = computed<Record<string, number>>(() => {
 	const result = props.result;
@@ -468,20 +451,14 @@ const autoColumnWidths = computed<Record<string, number>>(() => {
 const columnPixelWidth = computed(() => props.columnWidth);
 
 /**
- * Width of one rendered column.
+ * Width of one rendered column. Precedence is override → auto → the
+ * `columnWidth` prop: a dragged column keeps its dragged width, an untouched
+ * column re-fits on every new result or measurement, and the prop is the last
+ * resort for a column with nothing to measure.
  *
- * Precedence is override → auto → the `columnWidth` prop:
- *  - a dragged column keeps its dragged width, so the fit cannot snap it back
- *    when the result changes;
- *  - an untouched column re-fits on every new result, hiding or un-hiding a
- *    column, or font measurement;
- *  - the prop is the last resort, for a column with nothing to measure.
- *
- * Only the override is floored at {@link MIN_COLUMN_WIDTH}. An auto width is
- * left alone, so it can go all the way down to `GRID_MIN_AUTO_WIDTH` — the
- * 120px drag floor is a hand-sized minimum, and applying it to a fitted width
- * would put back exactly the empty-looking narrow columns the auto fit exists
- * to remove.
+ * Only the override is floored at {@link MIN_COLUMN_WIDTH}; an auto width is
+ * left alone so it can go down to `GRID_MIN_AUTO_WIDTH`, since the 120px drag
+ * floor would put back the empty-looking narrow columns the auto fit removes.
  */
 function widthFor(column: string): number {
 	const dragged = columnWidths.value[column];
@@ -490,17 +467,13 @@ function widthFor(column: string): number {
 }
 
 /**
- * Re-measures the character width against the font a rendered cell is
- * actually painted in, and re-fits anything the user has not sized.
+ * Re-measures the character width against the font a rendered cell is painted
+ * in, and re-fits anything the user has not sized.
  *
  * `getComputedStyle` on a live `.grid-cell` rather than a hardcoded shorthand:
- * the mono face is a CSS variable, so its size and family can change with the
- * theme, and a literal would size every column against a face the grid does
- * not use. The cell is read for its resolved values only — nothing is
- * mutated.
- *
- * Does nothing when no cell is rendered yet (an empty result, or a hidden
- * grid), leaving the library default in place until there is one.
+ * the mono face is a CSS variable, so its size and family change with the
+ * theme. Nothing is mutated, and with no cell rendered yet the library default
+ * stays in place.
  */
 function measureCellFont(): void {
 	const cell = scrollerNode()?.querySelector<HTMLElement>(".grid-cell");
@@ -595,6 +568,38 @@ function clearSort(): void {
 	if (!sortable.value) return;
 	sortColumn.value = null;
 	emit("sort", "", "asc");
+}
+
+/**
+ * Ctrl+Shift+ArrowUp / Ctrl+Shift+ArrowDown, resolved through the shortcut
+ * table so the chord is rebindable and printable like every other command.
+ * Handled here rather than in App.vue's window dispatcher — the mirror of the
+ * bookmark-jump decision there: a jump must work from anywhere, a sort needs
+ * a focused cell, so from the grid's own `onKeydown` the event only arrives
+ * while this grid holds focus, and `preventDefault` claims it to `match`. It
+ * runs first, ahead of the accel branches and the `NAVIGATION_KEYS` fallback,
+ * so a rebound chord beats the grid's own keys; a held chord is one action.
+ */
+const { match } = useShortcuts();
+
+function sortFromShortcut(event: KeyboardEvent): boolean {
+	const id = match(event);
+	if (id !== "result.sortAsc" && id !== "result.sortDesc") return false;
+	// A sort is not a cursor move: it re-runs the statement against the
+	// server, so a held chord must be one action and not a stream of reloads.
+	if (event.repeat) return true;
+	// Claimed either way: the webview must not scroll the grid or walk a caret
+	// on a chord the app has already given a meaning to.
+	event.preventDefault();
+	if (!sortable.value) return true;
+	const focus = selection.focus.value;
+	if (focus === null) return true;
+	// `focus.col` indexes the *visible* columns — the same list the header and
+	// the row cells are rendered from — so this is the name `setSort` wants.
+	const column = columns.value[focus.col] ?? "";
+	if (column === "") return true;
+	setSort(column, id === "result.sortAsc" ? "asc" : "desc");
+	return true;
 }
 
 /** True while the grid is showing the result of some column's sort. */
@@ -884,17 +889,12 @@ function stopColumnResize(): void {
 
 /**
  * Double-click drops the manual width so the column goes back to fitting its
- * content.
+ * content — "reset to default" would be the wrong name now that the width it
+ * restores is the fitted one, which changes with every result.
  *
- * "Reset to default" would be the wrong name now that there is a default to
- * return TO: the width this restores is the fitted one, which changes with
- * every result. Deleting the key is the whole operation — `widthFor` already
- * falls through to `autoColumnWidths` — and it is the only thing that clears
- * the user-sized marker, which is why it cannot be faked by writing a width.
- *
- * Guarded on absence so a double-click on an already-fitted column does not
- * churn the map, and so a fitted-but-unrendered column is not treated as an
- * override.
+ * Deleting the key is the whole operation: it is the only thing that clears
+ * the user-sized marker, so it cannot be faked by writing a width. Guarded on
+ * absence so a double-click on an already-fitted column does not churn the map.
  */
 function refitColumnWidth(column: string): void {
 	if (columnWidths.value[column] === undefined) return;
@@ -1018,12 +1018,9 @@ function columnIsSelected(col: number): boolean {
  * Only when the rectangle genuinely covers the row end to end. Testing the
  * last column instead — which is what this did — made a click on any single
  * cell there light the whole gutter, so one selected cell in the rightmost
- * column read as "the whole row is selected". The gutter is the row's own
- * affordance, so it may only claim a selection that includes every cell.
- *
- * This still lights for everything that really does select whole rows: the
- * gutter click and its shift-click both run to column 0 and back to the last
- * one, and select-all spans the full rectangle.
+ * column read as "the whole row is selected". The gutter click and its
+ * shift-click both run to column 0 and back, so a real whole-row selection
+ * still lights it.
  */
 function rowIsSelected(row: number): boolean {
 	const last = columns.value.length - 1;
@@ -1125,6 +1122,8 @@ onBeforeUnmount(() => {
 	stopCellDrag();
 	stopColumnResize();
 	stopColumnDrag();
+	// A pending open would otherwise arm itself against an unmounted grid.
+	clearCellHover();
 	scrollerResizeObserver?.disconnect();
 	scrollerResizeObserver = null;
 });
@@ -1144,15 +1143,12 @@ function onRowNumberClick(row: number, event: MouseEvent): void {
 /**
  * A header click only ever *selects*: a plain click collapses the selection
  * onto the column, a shift-click extends from the existing anchor. Sorting
- * moved to the header's context menu, because a click that re-runs the
- * statement is one the user cannot take back — choosing a column and ordering
- * the result are separate intentions and now have separate gestures.
+ * moved to the context menu — a click that re-runs the statement is one the
+ * user cannot take back, and choosing and ordering are separate intentions.
  *
- * A drag that crossed the reorder threshold ends with a `click` on the cell it
- * started from, and that click has to be discarded: the user asked to move the
- * column, and re-selecting the one that moved out from under the pointer is
- * not what they asked for. The flag is cleared on the next press, so a real
- * click is never lost.
+ * A drag past the reorder threshold ends with a `click` on the cell it started
+ * from, and that click is discarded rather than re-selecting the column that
+ * moved. The flag clears on the next press, so a real click is never lost.
  */
 function onHeaderClick(col: number, event: MouseEvent): void {
 	if (headerClickSuppressed) {
@@ -1203,6 +1199,11 @@ function selectionToTsv(): string {
 
 function onKeydown(event: KeyboardEvent): void {
 	if (editing.value) return;
+
+	// Ahead of the accel branches and the `NAVIGATION_KEYS` fallback: a rebound
+	// sort chord has to win here, and `ArrowUp`/`ArrowDown` with a modifier held
+	// must not fall through to vertical caret movement.
+	if (sortFromShortcut(event)) return;
 
 	const accel = event.metaKey || event.ctrlKey;
 	if (accel && event.key.toLowerCase() === "a") {
@@ -1264,8 +1265,17 @@ function onKeydown(event: KeyboardEvent): void {
 				.slice(0, next.col)
 				.reduce((sum, name) => sum + widthFor(name), 0);
 		const right = left + widthFor(column);
-		if (left < container.scrollLeft) {
-			container.scrollLeft = left;
+		// Both edges are measured in CONTENT coordinates, and the row-number
+		// gutter is sticky INSIDE the scrolled content — it never leaves the
+		// viewport, so it permanently occludes the band of content that spans
+		// `[scrollLeft, scrollLeft + ROW_NUMBER_WIDTH]`. The left edge of what
+		// is actually visible is therefore one gutter to the right of the raw
+		// scrollport edge, and the right edge is the raw one. Measuring the left
+		// side against `scrollLeft` alone parks column 0 at `scrollLeft = 56`
+		// with its first 56px hidden under the pin — which is what made arrowing
+		// left stop short of the edge.
+		if (left < container.scrollLeft + ROW_NUMBER_WIDTH) {
+			container.scrollLeft = left - ROW_NUMBER_WIDTH;
 		} else if (right > container.scrollLeft + container.clientWidth) {
 			container.scrollLeft = right - container.clientWidth;
 		} else {
@@ -1290,6 +1300,9 @@ watch(
 		// the end of an order they were never part of.
 		columnOrder.value = [];
 		stopColumnDrag();
+		// The row indices the parked tooltip recorded belong to the old result,
+		// and the pointer has not moved, so nothing would close it on its own.
+		clearCellHover();
 		// A new result can be short enough to lose the body's vertical
 		// scrollbar, which changes the header's horizontal range.
 		void nextTick(measureScrollbarGutter);
@@ -1304,6 +1317,20 @@ const rowStyle = computed<CSSProperties>(() => ({
 	height: `${ROW_HEIGHT}px`,
 	width: `${totalWidth.value}px`,
 }));
+
+/**
+ * 1-based, and global across pages: page 2 of a 1000-row page starts at 1001,
+ * not 1. A user comparing two pages reads these as positions in one result set,
+ * so numbering per page would silently point them at the wrong rows.
+ *
+ * The gutter cell and its tooltip both read this rather than repeating the
+ * arithmetic. `RecycleScroller` hands a pooled view a new row without
+ * remounting it, so two copies of the arithmetic are two chances to quote a
+ * different row than the cell the pointer is actually on.
+ */
+function rowNumberLabel(index: number): string {
+	return String(index + 1 + pageOffset.value);
+}
 
 
 function isNullValue(value: unknown): boolean {
@@ -1334,11 +1361,117 @@ function cellDisplayValue(value: unknown): string {
 	return formatValue(value);
 }
 
-/** Full value for hover; CSS truncation hides the tail, `title` keeps it. */
+/**
+ * Full value for hover; CSS truncation hides the tail and this keeps it.
+ *
+ * `undefined` for an empty cell is the whole reason this is not just
+ * `formatValue`: an empty cell has no tail to reveal, and a tooltip over it
+ * would be an empty box over an empty cell.
+ */
 function cellTitle(value: unknown): string | undefined {
 	if (isNullValue(value)) return "NULL";
 	const text = formatValue(value);
 	return text.length > 0 ? text : undefined;
+}
+
+/**
+ * The cell the pointer is on, and the anchor for the one tooltip that answers
+ * for all of them. Parked beside the header menu for the same reason: the body
+ * is a `RecycleScroller` pool, so a tooltip per cell means pooled-rows ×
+ * columns roots for a surface read by sweeping the pointer along a row.
+ *
+ * The row and column are kept; the text is not. `RecycleScroller` re-patches a
+ * pooled view in place, so a value captured at `pointerenter` is the one that
+ * view used to show — see `cellTooltipText`, which re-reads it.
+ */
+const hoveredCell = ref<{ row: number; col: number; x: number; y: number } | null>(null);
+
+/**
+ * Whether the open delay has run. Kept apart from `hoveredCell` so leaving a
+ * cell before the delay expires cancels the pending open without also having to
+ * remember whether it was ever scheduled.
+ */
+const cellTooltipArmed = ref(false);
+
+/**
+ * Open delay, which the provider's `delayDuration` cannot supply here: `open`
+ * is driven below, so the primitive's own delay never runs.
+ *
+ * Shorter than the header's 400ms because a data cell is a large target and
+ * the pointer is already parked on one, and longer than nothing because the
+ * way a grid is read is by sweeping along a row — at zero delay every cell
+ * crossed would strobe its own popup.
+ */
+const CELL_TOOLTIP_DELAY = 250;
+
+let cellTooltipTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * The text the parked tooltip shows, or null when it must stay closed.
+ *
+ * Derived from `rows` rather than captured at `pointerenter`, so the popup
+ * describes the row the pointer is on when it renders even though the element
+ * under it has just been re-patched. Empty is closed rather than blank.
+ * Editing and drag-select suppress it outright: nothing here can interrupt
+ * either, but a popup over the cell being typed into, or over a selection
+ * rectangle still being dragged out, is noise, and the grid tracks both.
+ */
+const cellTooltipText = computed(() => {
+	if (!cellTooltipArmed.value || hoveredCell.value === null) return null;
+	if (editing.value !== null || dragging.value) return null;
+	const hover = hoveredCell.value;
+	const value = cellAt(rows.value[hover.row], columnIndexes.value[hover.col] ?? 0);
+	return cellTitle(value) ?? null;
+});
+
+/** Drops the hover, so a tooltip cannot outlive the pointer position that opened it. */
+function clearCellHover(): void {
+	hoveredCell.value = null;
+	cellTooltipArmed.value = false;
+	if (cellTooltipTimer !== null) {
+		clearTimeout(cellTooltipTimer);
+		cellTooltipTimer = null;
+	}
+}
+
+/**
+ * Arms the tooltip after the delay, cancelling any pending open from the cell
+ * the pointer just left. Coordinates are viewport-relative and are captured
+ * once: the anchor deliberately does not chase the pointer inside one cell, so
+ * a cell read as a whole gets a tooltip that stays still over it.
+ */
+function onCellPointerEnter(row: number, col: number, event: PointerEvent): void {
+	clearCellHover();
+	hoveredCell.value = { row, col, x: event.clientX, y: event.clientY };
+	cellTooltipTimer = setTimeout(() => {
+		cellTooltipTimer = null;
+		cellTooltipArmed.value = true;
+	}, CELL_TOOLTIP_DELAY);
+}
+
+function onCellPointerLeave(): void {
+	clearCellHover();
+}
+
+/**
+ * The primitive's own close intents — a keypress it treats as dismissal, a
+ * pointerdown on the anchor — arrive as `update:open`, and since the tooltip is
+ * controlled here they are the only signal that it should be gone. Honouring
+ * them by dropping the hover keeps the two halves from disagreeing.
+ */
+function onCellTooltipOpenChange(open: boolean): void {
+	if (!open) clearCellHover();
+}
+
+/**
+ * The body's scroll event, and the recycling guard for the parked tooltip: a
+ * wheel scroll moves rows *under a stationary pointer* and fires no pointer
+ * event at all, so without this the popup would go on quoting a row that is no
+ * longer the one under the cursor.
+ */
+function onBodyScroll(): void {
+	clearCellHover();
+	syncHeaderScroll();
 }
 
 /** The statement collapsed to one line, which is all the status bar can show. */
@@ -1441,72 +1574,97 @@ function rowKey(_row: unknown, index: number): number {
 				role="presentation"
 				:style="headerContentStyle"
 			>
-				<div
-					class="grid-header-cell grid-row-number"
-					role="columnheader"
-					:style="rowNumberStyle"
-					aria-label="Row number"
-				>
-					#
-				</div>
-				<!-- `tabindex`/`aria-haspopup` because a sort is now a menu:
-				     a pointer is not the only way to open it. `aria-label`
-				     names the column for a screen reader, which would
-				     otherwise read the truncated text. -->
-				<div
-					v-for="(column, columnIndex) in columns"
-					:key="column"
-					class="grid-header-cell"
-					:class="{
-						'opacity-60': columnDrag?.moved === true && columnDrag?.column === column,
-					}"
-					role="columnheader"
-					:style="cellStyleFor(column)"
-					:title="column"
-					:aria-label="column"
-					tabindex="0"
-					:aria-haspopup="sortable ? 'menu' : undefined"
-					:data-selected="columnIsSelected(columnIndex)"
-					:data-col="columnIndex"
-					@click="onHeaderClick(columnIndex, $event)"
-					@pointerdown="startColumnDrag($event, column, columnIndex)"
-					@contextmenu="onHeaderContextMenu(column, $event)"
-					@keydown="onHeaderKeydown(column, $event)"
-				>
-					<span class="truncate">{{ column }}</span>
-					<ArrowUp
-						v-if="sortIcon(column) === 'asc'"
-						class="size-3 shrink-0 text-primary"
-						aria-hidden="true"
-					/>
-					<ArrowDown
-						v-else-if="sortIcon(column) === 'desc'"
-						class="size-3 shrink-0 text-primary"
-						aria-hidden="true"
-					/>
-					<!-- Where the drop lands. The header is a flex row with no gap
-					     to draw in, so the rule rides the edge of the column the
-					     drop displaces; it is decorative and must never take the
-					     press that drives the gesture. -->
-					<span
-						v-if="dropMarker?.column === column"
-						aria-hidden="true"
-						class="pointer-events-none absolute inset-y-0 w-0.5 bg-primary"
-						:class="dropMarker?.edge === 'trailing' ? 'right-0' : 'left-0'"
-					/>
-					<!-- The handle sits on the column's trailing edge; a
-					     double-click on it re-fits the column to its content,
-					     undoing the manual width. -->
+			<!-- The gutter is reference rather than content, which makes its
+			     header the one cell in the row whose meaning is not in its own
+			     text. The trigger is the cell, so nothing about the pin moves. -->
+			<Tooltip>
+				<TooltipTrigger as-child>
 					<div
-						class="grid-column-resize"
-						role="separator"
-						aria-orientation="vertical"
-						:aria-label="`Resize ${column}`"
-						:title="`Resize ${column} — double-click to fit to content`"
-						@pointerdown="startColumnResize($event, column)"
-						@dblclick.stop="refitColumnWidth(column)"
-					/>
-				</div>
+						class="grid-header-cell grid-row-number"
+						role="columnheader"
+						:style="rowNumberStyle"
+						aria-label="Row number"
+					>
+						#
+					</div>
+				</TooltipTrigger>
+				<TooltipContent class="max-w-lg">
+					Row number — 1-based position across all pages
+				</TooltipContent>
+			</Tooltip>
+			<!-- `tabindex`/`aria-haspopup` because a sort is now a menu: a pointer is
+			     not the only way to open it, and `aria-label` names the column for a
+			     screen reader that would otherwise read the truncated text.
+
+			     The trigger is the cell rather than the label span: it merges its
+			     listeners onto the child and never calls `preventDefault`, so the
+			     drag, the click, the menu and the keyboard route all reach the same
+			     element and the tooltip anchors to the whole column. Disabled during
+			     a reorder, which walks the pointer across every other header; `disabled`
+			     rather than `v-if` because unmounting would unmount the drag's cell. -->
+			<Tooltip
+				v-for="(column, columnIndex) in columns"
+				:key="column"
+				:disabled="columnDrag !== null"
+			>
+				<TooltipTrigger as-child>
+					<div
+						class="grid-header-cell"
+						:class="{
+							'opacity-60': columnDrag?.moved === true && columnDrag?.column === column,
+						}"
+						role="columnheader"
+						:style="cellStyleFor(column)"
+						:aria-label="column"
+						tabindex="0"
+						:aria-haspopup="sortable ? 'menu' : undefined"
+						:data-selected="columnIsSelected(columnIndex)"
+						:data-col="columnIndex"
+						@click="onHeaderClick(columnIndex, $event)"
+						@pointerdown="startColumnDrag($event, column, columnIndex)"
+						@contextmenu="onHeaderContextMenu(column, $event)"
+						@keydown="onHeaderKeydown(column, $event)"
+					>
+						<span class="truncate">{{ column }}</span>
+						<ArrowUp
+							v-if="sortIcon(column) === 'asc'"
+							class="size-3 shrink-0 text-primary"
+							aria-hidden="true"
+						/>
+						<ArrowDown
+							v-else-if="sortIcon(column) === 'desc'"
+							class="size-3 shrink-0 text-primary"
+							aria-hidden="true"
+						/>
+						<!-- Where the drop lands. The header is a flex row with no gap
+						     to draw in, so the rule rides the edge of the column the
+						     drop displaces; it is decorative and must never take the
+						     press that drives the gesture. -->
+						<span
+							v-if="dropMarker?.column === column"
+							aria-hidden="true"
+							class="pointer-events-none absolute inset-y-0 w-0.5 bg-primary"
+							:class="dropMarker?.edge === 'trailing' ? 'right-0' : 'left-0'"
+						/>
+						<!-- The handle sits on the column's trailing edge; a
+						     double-click on it re-fits the column to its content,
+						     undoing the manual width. -->
+						<div
+							class="grid-column-resize"
+							role="separator"
+							aria-orientation="vertical"
+							:aria-label="`Resize ${column}`"
+							:title="`Resize ${column} — double-click to fit to content`"
+							@pointerdown="startColumnResize($event, column)"
+							@dblclick.stop="refitColumnWidth(column)"
+						/>
+					</div>
+				</TooltipTrigger>
+				<!-- Past the primitive's own `max-w-xs`: a column name is an
+				     identifier, and reading one is the entire reason the
+				     tooltip exists. -->
+				<TooltipContent class="max-w-lg">{{ column }}</TooltipContent>
+			</Tooltip>
 			</div>
 		</div>
 
@@ -1532,25 +1690,37 @@ function rowKey(_row: unknown, index: number): number {
 			@click="gridFocused = true"
 			@focus="gridFocused = true"
 			@blur="gridFocused = false"
-			@scroll="syncHeaderScroll"
+			@scroll="onBodyScroll"
 			@keydown="onKeydown"
 		>
 				<template #default="{ item, index }">
 					<div class="grid-row flex" role="row" :style="rowStyle">
-						<div
-							class="grid-cell grid-row-number"
-							role="cell"
-							:style="rowNumberStyle"
-							:data-selected="rowIsSelected(index)"
-							@click="onRowNumberClick(index, $event)"
-						>
-							<!-- 1-based, and global across pages: page 2 of a
-							     1000-row page starts at 1001, not 1. A user
-							     comparing two pages reads these as positions in
-							     one result set, so numbering per page would
-							     silently point them at the wrong rows. -->
-							{{ index + 1 + pageOffset }}
-						</div>
+						<Tooltip>
+							<TooltipTrigger as-child>
+								<div
+									class="grid-cell grid-row-number"
+									role="cell"
+									:style="rowNumberStyle"
+									:data-selected="rowIsSelected(index)"
+									@click="onRowNumberClick(index, $event)"
+								>
+									{{ rowNumberLabel(index) }}
+								</div>
+							</TooltipTrigger>
+							<!-- One tooltip per RENDERED row, which is what the virtualiser
+							     already bounds: the scroller pools its views, so scrolling
+							     re-patches this text rather than mounting anything. It is
+							     deliberately not the one shared popper the header menu uses —
+							     a menu has to follow a click, whereas a tooltip would have to
+							     open before the provider's delay to look right. Both the cell
+							     and this quote `rowNumberLabel`, so a recycled view cannot pair
+							     one row's cell with another row's number. -->
+							<TooltipContent class="max-w-lg">{{ rowNumberLabel(index) }}</TooltipContent>
+						</Tooltip>
+						<!-- Hover is reported here rather than left to the
+						     primitive's own trigger: the tooltip that answers is
+						     one parked instance, and this is where the row/col it
+						     re-reads comes from. -->
 						<div
 							v-for="(column, columnIndex) in columns"
 							:key="column"
@@ -1563,7 +1733,8 @@ function rowKey(_row: unknown, index: number): number {
 							:data-null="isNullAt(index, columnIndexes[columnIndex] ?? 0)"
 							:data-selected="selection.isSelected(index, columnIndex)"
 							:data-active="selection.isActive(index, columnIndex)"
-							:title="cellTitle(cellAt(item, columnIndexes[columnIndex] ?? 0))"
+							@pointerenter="onCellPointerEnter(index, columnIndex, $event)"
+							@pointerleave="onCellPointerLeave()"
 							@click="onCellClick(index, columnIndex, $event)"
 							@pointerdown="onCellPointerDown(index, columnIndex, $event)"
 							@dblclick="startEdit(index, columnIndex)"
@@ -1630,6 +1801,35 @@ function rowKey(_row: unknown, index: number): number {
 				</DropdownMenuContent>
 			</DropdownMenu>
 
+			<!-- One tooltip for every data cell, and the same reason as the
+			     menu above: the body is a `RecycleScroller` pool over a
+			     scrolling surface, so a tooltip per cell would mount a root
+			     per pooled row per column. Parked here, once, and anchored at
+			     the pointer. `open` is driven by `cellTooltipText` rather than
+			     by the trigger, because the trigger is the zero-size anchor
+			     and the cell's own pointer events are what report the hover. -->
+			<Tooltip :open="cellTooltipText !== null" @update:open="onCellTooltipOpenChange">
+				<!-- `pointer-events-none` is what keeps this from stealing the
+				     hover, the click, or the drag from the cells underneath;
+				     `fixed` because the coordinates are viewport-relative while
+				     the grid sits offset inside the workspace pane. -->
+				<TooltipTrigger as-child>
+					<span
+						class="pointer-events-none fixed size-0"
+						:style="{
+							left: `${hoveredCell?.x ?? 0}px`,
+							top: `${hoveredCell?.y ?? 0}px`,
+						}"
+						aria-hidden="true"
+					/>
+				</TooltipTrigger>
+				<!-- Past the primitive's own `max-w-xs`: the tail this exists for
+				     is longer than any column a user chose, and the content
+				     wraps rather than truncating a second time. Closed renders
+				     no DOM at all, so an empty cell has no empty box. -->
+				<TooltipContent class="max-w-lg">{{ cellTooltipText }}</TooltipContent>
+			</Tooltip>
+
 			<!-- One row, three zones, exactly as DBX lays it out: what came back
 			     and how long it took, the statement that produced it, then the
 			     controls that act on it. The SQL is collapsed to a single line so
@@ -1669,12 +1869,10 @@ function rowKey(_row: unknown, index: number): number {
 					     and rendering the controls anyway would offer a
 					     "Page 1" the workspace cannot act on.
 
-					     There is deliberately no Last button and no
-					     jump-to-page input. Both need a row count the
-					     statement never returned — the query is limited and
-					     the total is unknown — so they could only ever
-					     guess. Next stays enabled on a full page, which is
-					     the only evidence a further page exists. -->
+					     There is deliberately no Last button and no jump-to-page
+					     input: both need a row count the statement never returned,
+					     so they could only ever guess. Next stays enabled on a full
+					     page, which is the only evidence a further page exists. -->
 					<template v-if="page !== undefined">
 						<DropdownMenu>
 							<DropdownMenuTrigger as-child>

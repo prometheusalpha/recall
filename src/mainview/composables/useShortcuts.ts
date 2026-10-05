@@ -36,7 +36,9 @@ export type CommandId =
 	| "tab.closeAll"
 	| "tab.next"
 	| "tab.prev"
-	| "quickOpen.toggle";
+	| "quickOpen.toggle"
+	| "result.sortAsc"
+	| "result.sortDesc";
 
 export interface CommandDefinition {
 	id: CommandId;
@@ -100,6 +102,55 @@ export const SHORTCUT_COMMANDS: CommandDefinition[] = [
 		label: "Quick open",
 		group: "View",
 		defaultBinding: accel("p"),
+	},
+
+	/*
+	 * Sort gestures for the result grid.
+	 *
+	 * These two are the one deliberate exception to the accel rule above: the
+	 * user asked for real Control on every platform, so `ctrl` is spelled out
+	 * instead of being derived from the platform, and `meta` is explicitly
+	 * false. Calling `accel()` here would hand macOS ⌘⇧↑ / ⌘⇧↓ and quietly
+	 * collide with the Cmd chords the rest of the app already owns.
+	 *
+	 * Both chords stay on the table — so they are rebindable and printable in
+	 * the settings dialog — but deliberately *off* the window dispatcher's
+	 * `runCommand` path that drives every other command here: sorting needs a
+	 * focused cell, and there is no such thing when the sidebar, the editor or
+	 * the files panel holds focus. `ResultGrid.vue` claims the chord from its
+	 * own `onKeydown` instead, and because that handler runs before the window
+	 * dispatcher sees the event and marks it `defaultPrevented`, there is still
+	 * exactly one path and no second listener. A press while no grid holds
+	 * focus resolves to one of these ids and finds no registered
+	 * implementation, so it does nothing.
+	 *
+	 * `match` returns the first match in table order, and both chords are
+	 * distinct from every accel-built entry above on all four modifier flags,
+	 * so neither can shadow an existing command.
+	 */
+	{
+		id: "result.sortAsc",
+		label: "Sort column ascending",
+		group: "Result grid",
+		defaultBinding: {
+			key: "ArrowUp",
+			meta: false,
+			ctrl: true,
+			shift: true,
+			alt: false,
+		},
+	},
+	{
+		id: "result.sortDesc",
+		label: "Sort column descending",
+		group: "Result grid",
+		defaultBinding: {
+			key: "ArrowDown",
+			meta: false,
+			ctrl: true,
+			shift: true,
+			alt: false,
+		},
 	},
 ];
 
@@ -182,8 +233,21 @@ export function registerCommand(id: CommandId, run: () => void): void {
 	registry.set(id, run);
 }
 
-export function runCommand(id: CommandId): void {
-	registry.get(id)?.();
+/**
+ * Runs a command and reports whether anything was there to run.
+ *
+ * The return value is load-bearing for the window dispatcher: a chord that
+ * resolves to a command with no registered implementation must NOT be claimed
+ * with `preventDefault`, or the app would swallow a key it is not acting on.
+ * Grid-scoped commands rely on this — they live in the table so they are
+ * rebindable and printable, but their implementation sits in the grid, which
+ * claims the chord itself when it holds focus and lets it through otherwise.
+ */
+export function runCommand(id: CommandId): boolean {
+	const run = registry.get(id);
+	if (!run) return false;
+	run();
+	return true;
 }
 
 const ARROWS: Record<string, string> = {

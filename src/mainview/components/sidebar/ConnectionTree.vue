@@ -4,6 +4,7 @@ import type { Component } from "vue";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
 import { Columns3, Database, Folder, Key, Link, Pencil, RefreshCw, Search, Table2, Zap } from "lucide-vue-next";
+import { useDebounceFn } from "@vueuse/core";
 import DatabaseIcon from "../icons/DatabaseIcon.vue";
 import TreeRow from "./TreeRow.vue";
 import { Button } from "../ui/button";
@@ -39,22 +40,21 @@ const ROW_BUFFER = 200;
 const SEARCH_SEPARATOR = ".";
 
 /**
+ * How long the search box has to be still before its term is run. Long enough
+ * that a typed word is one query rather than one per character, short enough
+ * that the tree still answers while the word is being typed.
+ */
+const SEARCH_DEBOUNCE_MS = 250;
+
+/**
  * A connection is a *server*, not a database: it carries the host, port and
- * credentials, and every database on it is reachable from that one profile.
- * So the levels below it are `connection → database → schema → table` for
- * Postgres. MySQL has no schema layer below a database, so its database rows
- * list tables directly.
- *
+ * credentials, so every database on it is reachable from that one profile. The
+ * levels below are `connection → database → schema → table` for Postgres, while
+ * MySQL has no schema layer and its database rows list tables directly.
  * Postgres cannot cross databases in one session, so a database row is a
- * separate socket to the server, opened on demand — the backend keys its pool
- * by (profile, database) and the tree just names the pair.
- *
- * Below a table the tree carries read-only metadata: one `group` row per kind
- * of object. Opening the table only builds those four rows; each list is
- * fetched when its group is opened, so expanding a table a user is merely
- * browsing costs nothing. The `leaf` rows a list describes are never loaded
- * into the tree the loaders walk — they live in `tableMeta` and are
- * materialised as children only for the group that asked for them.
+ * separate socket opened on demand. Below a table sits one `group` row per
+ * metadata kind, fetched only when its group is opened; the `leaf` rows live
+ * in `tableMeta` and are children only of the group that asked for them.
  */
 type TreeNode =
 	| {
@@ -196,6 +196,17 @@ const expanded = ref(new Set<string>());
 const children = ref(new Map<string, TreeNode[]>());
 /** Keys with an in-flight child fetch, used to spin their row. */
 const loadingKeys = ref(new Set<string>());
+
+/**
+ * The promise each in-flight child fetch is published under, keyed like
+ * `loadingKeys`. A caller that reaches a node another crawl already owns waits
+ * on this instead of opening a second fetch for a key whose row is already
+ * spinning. Waiting is not inheriting: the owner discards its result once it
+ * has been superseded (see `claimCrawl`), so the waiter refetches under its
+ * own ownership. Deliberately not a `ref` — nothing renders from it, and the
+ * reactive proxy would only be paid for on every set and get.
+ */
+const inflight = new Map<string, Promise<void>>();
 /**
  * Fetched metadata lists, keyed by table key and then by group. Kept apart
  * from `children` on purpose: `children` is what `flattenTree` walks, so a leaf
@@ -212,6 +223,39 @@ const tableMeta = ref(new Map<string, Map<MetaGroup, TreeNode[]>>());
  * triggers under a locked-down role being the usual case.
  */
 const failedGroups = ref(new Set<string>());
+
+/**
+ * Why a profile's subtree is missing, keyed by profile id. The status enum
+ * cannot carry a reason, and it does not need one to describe the difference
+ * that matters here: a server that answered and hosts nothing and a server
+ * that never answered both leave the row with no children, so the enum's
+ * `error` is the only signal distinguishing them, and it says nothing about
+ * *which* server failed or why. Held per profile and cleared as soon as a
+ * crawl rebuilds that subtree, so a reason cannot outlive the outage that
+ * produced it.
+ */
+const connectionFailures = ref<Record<string, string>>({});
+
+/**
+ * Records why a profile's subtree could not be built. Replaces the entry
+ * rather than merging, so a second failed crawl reports its own reason instead
+ * of the first one's.
+ */
+function noteConnectionFailure(id: string, err: unknown): void {
+	connectionFailures.value = { ...connectionFailures.value, [id]: errorMessage(err) };
+}
+
+/**
+ * Drops a profile's recorded failure. Called where a crawl has just rebuilt
+ * that subtree from a session that answered, which makes whatever was recorded
+ * about it no longer true.
+ */
+function forgetConnectionFailure(id: string): void {
+	if (!(id in connectionFailures.value)) return;
+	const next = { ...connectionFailures.value };
+	delete next[id];
+	connectionFailures.value = next;
+}
 
 /** One letter per node kind, so a key names its kind without a full scan. */
 const KEY_PREFIX: Record<TreeNode["kind"], string> = {
@@ -271,16 +315,19 @@ const roots = computed<TreeNode[]>(() =>
 /**
  * Splits the search box into the table-name filter handed to the backend. A
  * `database.table` term filters on the table name alone, so the match is found
- * in whichever container holds it.
+ * in whichever container holds it: the part before the separator is a hint for
+ * the reader, not a scope the server is ever asked to honour, and nothing is
+ * left over for the tree to narrow its crawl by.
  */
-function parseSearch(term: string): { filter: string; scoped: boolean } {
+function parseSearch(term: string): string {
 	const trimmed = term.trim();
 	const at = trimmed.indexOf(SEARCH_SEPARATOR);
-	if (at <= 0) return { filter: trimmed, scoped: false };
-	return { filter: trimmed.slice(at + 1).trim(), scoped: true };
+	if (at <= 0) return trimmed;
+	return trimmed.slice(at + 1).trim();
 }
 
-const search = computed(() => parseSearch(searchTerm.value));
+/** The term as the backend sees it: what every table list is fetched with. */
+const searchFilter = computed(() => parseSearch(searchTerm.value));
 
 /**
  * The databases on a server. Both dialects list them the same way, so this is
@@ -313,7 +360,7 @@ async function tableNodes(
 		connectionId,
 		database,
 		schema,
-		filter: search.value.filter,
+		filter: searchFilter.value,
 	});
 	return tables.map((entry) => ({
 		kind: "table",
@@ -372,7 +419,16 @@ function groupNodes(
 	}));
 }
 
-/** Column rows, DBX-style: `public_id (char(12))` plus a nullability pill. */
+/**
+ * Column rows, DBX-style: `public_id (char(12))` plus a nullability pill.
+ *
+ * Every column gets a tooltip, not only the commented ones. The label is
+ * `name (type)` and the sidebar truncates it, so the two facts a user most
+ * needs when the name is long — the full identifier and whether it is a key —
+ * used to be unreachable: a column with no `comment` had no hover text at all.
+ * The facts are joined with `·` rather than newlines because `TooltipContent`
+ * is an inline-flex with no `whitespace-pre-wrap` and wraps inside `max-w-lg`.
+ */
 function columnLeaves(tableKey: string, columns: ColumnInfo[]): TreeNode[] {
 	return columns.map((column) => ({
 		kind: "leaf",
@@ -381,16 +437,39 @@ function columnLeaves(tableKey: string, columns: ColumnInfo[]): TreeNode[] {
 		badge: column.isNullable
 			? { text: "Nullable", tone: "muted" }
 			: { text: "Not null", tone: "warning" },
-		title: column.comment ?? undefined,
+		title: [
+			`${column.name} (${column.dataType})`,
+			column.isNullable ? "NULL" : "NOT NULL",
+			column.isPrimaryKey ? "PRIMARY KEY" : undefined,
+			column.defaultValue === null
+				? undefined
+				: `DEFAULT ${column.defaultValue}`,
+			column.comment ?? undefined,
+		]
+			.filter((part) => part !== undefined)
+			.join(" · "),
 	}));
 }
 
-/** Index rows, listing the key columns in index order: `idx (a, b)`. */
+/**
+ * Index rows, listing the key columns in index order: `idx (a, b)`.
+ *
+ * As with columns, the title is unconditional: uniqueness and the index method
+ * are not on the label, and a composite index's key list is exactly what gets
+ * truncated away in a narrow sidebar.
+ */
 function indexLeaves(tableKey: string, indexes: IndexInfo[]): TreeNode[] {
 	return indexes.map((index) => ({
 		kind: "leaf",
 		key: makeKey("leaf", tableKey, "indexes", index.name),
 		label: `${index.name} (${index.columns.join(", ")})`,
+		title: [
+			`${index.name} (${index.columns.join(", ")})`,
+			index.isPrimary ? "PRIMARY KEY" : index.isUnique ? "UNIQUE" : undefined,
+			index.method ?? undefined,
+		]
+			.filter((part) => part !== undefined)
+			.join(" · "),
 	}));
 }
 
@@ -441,21 +520,95 @@ async function fetchMetaLeaves(node: GroupNode): Promise<TreeNode[]> {
 }
 
 /**
- * Loads a node's children once. A cached or in-flight node returns without
- * touching the network, so re-expanding a subtree costs nothing. Connection
- * and schema failures are toasted and left uncached, so the next expand
- * retries; a group that fails is handled inside its branch instead, because
- * it has to stay visibly empty rather than throw away the whole subtree.
+ * Who owns the tree. Bumped by every crawl that starts and by every keystroke,
+ * so "is my crawl still current?" is one comparison, not a race on promises.
+ *
+ * A crawl is not atomic: it fetches one node at a time and writes each as it
+ * lands. Overlapping crawls meant the newer dropped the lists the older was
+ * building and the older wrote underneath the drop — and `flattenTree` emits a
+ * child only when its parent is expanded *and* present, so those rows landed
+ * nowhere: an empty tree, no error, search apparently broken.
  */
-async function loadChildren(node: TreeNode): Promise<void> {
+let crawlGeneration = 0;
+
+/**
+ * Claims the tree for one crawl and hands back the check that crawl carries for
+ * its whole run. `true` means a newer crawl — or a newer keystroke — has taken
+ * over, and the holder must return at its next await boundary without writing.
+ */
+function claimCrawl(): () => boolean {
+	const mine = ++crawlGeneration;
+	return () => crawlGeneration !== mine;
+}
+
+/**
+ * Loads a node's children once, but only for the caller that still owns the
+ * tree. `superseded` is checked before the fetch and after every await inside
+ * it, so a replaced crawl writes nothing — it fetched with a term the user has
+ * typed past, into a tree emptied in the meantime.
+ *
+ * A node another crawl owns is waited for, then refetched rather than skipped:
+ * skipping is what left a search showing nothing, since the newest crawl walked
+ * past every node the oldest still owned.
+ */
+async function loadChildren(node: TreeNode, superseded?: () => boolean): Promise<void> {
 	if (node.kind === "leaf") return;
-	if (children.value.has(node.key) || loadingKeys.value.has(node.key)) return;
+	if (children.value.has(node.key)) return;
+	if (superseded?.()) return;
+	while (true) {
+		const pending = inflight.get(node.key);
+		if (!pending) break;
+		await pending;
+		// The owner may have written after all — this caller only got here
+		// because that write had not landed yet — and a caller that has itself
+		// been replaced has no business refetching anything.
+		if (children.value.has(node.key) || superseded?.()) return;
+	}
 
 	setLoading(node.key, true);
+	// Published before the first await so a caller arriving mid-fetch waits on
+	// the promise rather than starting a duplicate for the same node.
+	const request = fetchChildren(node, superseded);
+	inflight.set(node.key, request);
+	try {
+		await request;
+	} finally {
+		inflight.delete(node.key);
+		setLoading(node.key, false);
+	}
+}
+
+/**
+ * The fetch-and-write half of `loadChildren`, split out so a run can be
+ * published to a waiting caller before its first await. Every fetch lands in a
+ * local first: the ownership check has to sit between the await and the write,
+ * which it cannot do from inside a call argument — `setChildren(key, await …)`
+ * stores a stale list the instant the newer crawl has emptied that container.
+ */
+async function fetchChildren(node: TreeNode, superseded?: () => boolean): Promise<void> {
 	try {
 		if (node.kind === "connection") {
-			await connections.ensureConnected(node.id);
-			setChildren(node.key, await databaseNodes(node.id));
+			// A search asks every saved profile to open a session at once, so a
+			// failure here is one row out of many rather than the user's single
+			// intent — and a toast per unreachable server is a wall of
+			// near-identical notifications with the profile the user actually
+			// cares about buried in the middle. The failure is recorded on the
+			// row instead, which is strictly more legible than a toast anyway:
+			// it stays readable after the crawl moves on, and it is attached to
+			// the one server it belongs to. `connections.connect` has already
+			// set the status to `error`, so the row's glyph carries it too.
+			try {
+				await connections.ensureConnected(node.id);
+			} catch (err) {
+				noteConnectionFailure(node.id, err);
+				return;
+			}
+			// A session that answered makes any previously recorded reason stale,
+			// and the connection is about to be rewritten from it.
+			forgetConnectionFailure(node.id);
+			const databases = await databaseNodes(node.id);
+			if (superseded?.()) return;
+			setChildren(node.key, databases);
 		} else if (node.kind === "database") {
 			// Postgres nests schemas inside the database; MySQL has no such
 			// layer, so its database opens straight onto its tables.
@@ -463,15 +616,19 @@ async function loadChildren(node: TreeNode): Promise<void> {
 				(entry) => entry.id === node.connectionId,
 			);
 			if (config?.dbType === "mysql") {
-				setChildren(
-					node.key,
-					await tableNodes(node.connectionId, node.database, node.database),
+				const tables = await tableNodes(
+					node.connectionId,
+					node.database,
+					node.database,
 				);
+				if (superseded?.()) return;
+				setChildren(node.key, tables);
 			} else {
 				const schemas = await connections.listSchemas({
 					connectionId: node.connectionId,
 					database: node.database,
 				});
+				if (superseded?.()) return;
 				setChildren(
 					node.key,
 					schemas.map((name) => ({
@@ -485,10 +642,9 @@ async function loadChildren(node: TreeNode): Promise<void> {
 				);
 			}
 		} else if (node.kind === "schema") {
-			setChildren(
-				node.key,
-				await tableNodes(node.connectionId, node.database, node.schema),
-			);
+			const tables = await tableNodes(node.connectionId, node.database, node.schema);
+			if (superseded?.()) return;
+			setChildren(node.key, tables);
 		} else if (node.kind === "table") {
 			// A table row is only a container. Its four groups are cheap to build
 			// and cost one request each to fill, so opening a table must fire
@@ -498,7 +654,12 @@ async function loadChildren(node: TreeNode): Promise<void> {
 				node.key,
 				groupNodes(node.key, node.connectionId, node.database, node.schema, node.table),
 			);
-		} else {
+		} else if (node.kind === "group") {
+			// Spelled out rather than a bare `else`: `loadChildren` returns on a
+			// leaf before ever calling this, but that exclusion does not survive
+			// the hop into a separate function, so the last branch would
+			// otherwise be typed as "group or leaf" and reach for a leaf's
+			// missing `tableKey`/`group`.
 			// The memo is what makes this the single fetch path: an already-loaded
 			// group costs nothing to reopen, and only a group whose fetch failed
 			// (or whose cache was dropped) asks the server again.
@@ -511,6 +672,10 @@ async function loadChildren(node: TreeNode): Promise<void> {
 			}
 			try {
 				const leaves = await fetchMetaLeaves(node);
+				// Nothing is cached on the way out of a superseded run either:
+				// the memo promises "this group's leaves", not "leaves fetched by
+				// a crawl that was told to stop".
+				if (superseded?.()) return;
 				cacheMetaLeaves(node.tableKey, node.group, leaves);
 				failedGroups.value.delete(node.key);
 				setChildren(node.key, leaves);
@@ -527,8 +692,6 @@ async function loadChildren(node: TreeNode): Promise<void> {
 		}
 	} catch (err) {
 		toast(errorMessage(err));
-	} finally {
-		setLoading(node.key, false);
 	}
 }
 
@@ -560,27 +723,30 @@ function activate(node: TreeNode): void {
 }
 
 /**
- * Opens every connection, its databases and their schemas so a table-name
- * filter has somewhere to match. Sequenced rather than parallel: a server only
- * accepts so much at once, and the awaits are cheap relative to the queries
- * they guard.
- *
- * It stops at the schemas on purpose. A table row is left closed, because
- * expanding one fans out into four metadata requests and a filter keystroke
- * must not do that across every table of every connection to reveal matches.
+ * Opens every connection, database and schema so a table-name filter has
+ * somewhere to match, sequenced because a server takes only so much at once,
+ * with `superseded` re-read at every level so a newer term leaves the rest
+ * alone. Expansion is not optional — that is what separates this from
+ * `reloadOpenContainers`: a match inside a collapsed container is a row the
+ * user cannot see. It stops at the schemas because expanding a table fans out
+ * into four metadata requests a keystroke must not trigger everywhere.
  */
-async function expandAll(): Promise<void> {
+async function expandAll(superseded: () => boolean): Promise<void> {
 	for (const connection of roots.value) {
+		if (superseded()) return;
 		setExpanded(connection.key, true);
-		await loadChildren(connection);
+		await loadChildren(connection, superseded);
+		if (superseded()) return;
 		for (const database of childrenOf(connection) ?? []) {
 			if (database.kind !== "database") continue;
 			setExpanded(database.key, true);
-			await loadChildren(database);
+			await loadChildren(database, superseded);
+			if (superseded()) return;
 			for (const schema of childrenOf(database) ?? []) {
 				if (schema.kind !== "schema") continue;
 				setExpanded(schema.key, true);
-				await loadChildren(schema);
+				await loadChildren(schema, superseded);
+				if (superseded()) return;
 			}
 		}
 	}
@@ -589,13 +755,11 @@ async function expandAll(): Promise<void> {
 /**
  * A filter change invalidates every table list, since each was fetched with the
  * previous filter. Dropping the cache is what makes the next expansion refetch;
- * a node the user never opened keeps its (still empty) absence and stays offline.
+ * a node the user never opened keeps its absence and stays offline.
  *
- * The drop cascades: table rows lose their group rows, group rows lose their
- * leaves, and the fetched metadata goes with them. Holding every list the user
- * ever drilled into would grow without bound, and the tree that shows them has
- * just been rebuilt anyway. The failure marks go too, so a stale empty list
- * can never suppress the retry that would replace it.
+ * The drop cascades — groups lose their leaves, the fetched metadata goes too —
+ * because holding every list the user drilled into would grow without bound.
+ * Failure marks go too, so a stale empty list cannot suppress its retry.
  */
 function dropTableLists(): void {
 	const stale = [
@@ -618,16 +782,13 @@ function dropTableLists(): void {
 
 /**
  * Drops the cached lists of one connection only, because the session they came
- * from has just been replaced. A global drop would throw away every other
- * connection's cache and make a reconnect cost the user their whole tree.
+ * from has just been replaced — a global drop would cost the user their whole
+ * tree on every reconnect.
  *
  * Keys are length-prefixed and carry no connection id in a readable position,
- * so the subtree is walked instead of pattern-matched: each node's own children
- * are dropped only after its descendants have been reached, which the
- * depth-first pass below does by collecting keys before deleting any.
- *
- * Expansion survives — the user opened those nodes and meant to — so the
- * reconnecting connection is refetched at the same depth it was left.
+ * so the subtree is walked instead: children are dropped only after their
+ * descendants have been collected. Expansion survives — the user opened those
+ * nodes and meant to — so the connection is refetched at the depth it was left.
  */
 function dropConnectionLists(connectionId: string): void {
 	const connection = roots.value.find(
@@ -670,49 +831,88 @@ async function reconnectConnection(): Promise<void> {
 		return;
 	}
 	dropConnectionLists(id);
+	// The refetch rebuilds this subtree from the new session, so it claims the
+	// tree before running: a search still crawling over the socket that was just
+	// replaced must not write lists derived from it.
+	const superseded = claimCrawl();
 	try {
-		await reloadOpenContainers();
+		await reloadOpenContainers(superseded);
 	} catch (err) {
 		toast(errorMessage(err));
 	}
 }
 
-/** Refetches every container node that is currently open, after a cache drop. */
-async function reloadOpenContainers(): Promise<void> {
+/**
+ * Refetches every container node currently open, after a cache drop. Expansion
+ * is the filter: only nodes the user opened are worth asking again, because
+ * those are the ones a drop took from. A search cannot work this way — its
+ * matches hide in containers the user never opened — which is why it crawls with
+ * `expandAll` instead of reusing this.
+ *
+ * The ownership check is passed in, not claimed: the caller owns this run, and
+ * claiming again would make every node it waits on declare it stale.
+ */
+async function reloadOpenContainers(superseded: () => boolean): Promise<void> {
 	for (const connection of roots.value) {
 		if (!isExpanded(connection)) continue;
-		await loadChildren(connection);
+		await loadChildren(connection, superseded);
+		if (superseded()) return;
 		for (const database of childrenOf(connection) ?? []) {
 			if (database.kind !== "database" || !isExpanded(database)) continue;
-			await loadChildren(database);
+			await loadChildren(database, superseded);
+			if (superseded()) return;
 			for (const schema of childrenOf(database) ?? []) {
 				if (schema.kind !== "schema" || !isExpanded(schema)) continue;
-				await loadChildren(schema);
+				await loadChildren(schema, superseded);
+				if (superseded()) return;
 			}
 		}
 	}
 }
 
+/**
+ * The debounced entry point. `useDebounceFn` rather than a hand-rolled timer,
+ * because the goal is not debouncing itself: one settled term is one crawl of
+ * every connection on the server, and the terms between a word's first and last
+ * character can only ever produce rows the next keystroke discards.
+ */
+const runSearch = useDebounceFn(onSearchChanged, SEARCH_DEBOUNCE_MS);
+
+/**
+ * The generation is bumped here rather than inside the debounced body. A crawl
+ * already running is fetching for the term this keystroke replaces, and it has
+ * to stop writing the moment the user types — not when the debounce expires.
+ */
 watch(
-	() => search.value.filter,
+	() => searchFilter.value,
 	(next, previous) => {
 		if (next === previous) return;
-		dropTableLists();
-		void onSearchChanged(next);
+		crawlGeneration++;
+		void runSearch(next);
 	},
 );
 
+/**
+ * One settled term, one crawl. The cache drop rides in here so it happens once
+ * per term rather than once per character: every list still in the tree was
+ * fetched with the previous filter, so it has to go before the refetch and
+ * never after it.
+ */
 async function onSearchChanged(filter: string): Promise<void> {
+	const superseded = claimCrawl();
+	dropTableLists();
 	try {
 		if (filter === "") {
 			// Clearing the box restores the unfiltered lists of open containers.
-			await reloadOpenContainers();
+			await reloadOpenContainers(superseded);
 			return;
 		}
-		// A `database.table` term is matched across every container, so nothing is
-		// force-opened; a bare name has to reveal its own matches.
-		if (search.value.scoped) await reloadOpenContainers();
-		else await expandAll();
+		// A `database.table` term is matched on its table name alone, so it is
+		// searched exactly as a bare name is — same crawl, same expansion. The
+		// shortcut it used to take through `reloadOpenContainers` opened nothing
+		// the user had not already opened, so on a collapsed tree it fetched
+		// matches and showed none.
+		await expandAll(superseded);
 	} catch (err) {
 		toast(errorMessage(err));
 	}
@@ -807,7 +1007,15 @@ function rowBinding(slot: unknown): TreeRowBinding {
 		loading: isLoading(node),
 		childCount: childCountOf(node),
 		badge: leaf?.badge,
-		title: leaf?.title,
+		// A connection that could not be reached reads as an empty row, which is
+		// indistinguishable from a server that answered and holds nothing. The
+		// recorded reason rides the row's tooltip, which is already the place
+		// detail that does not fit in a label goes — and `TreeRow` renders it
+		// through the shared Tooltip, so the reason wraps instead of clipping.
+		title:
+			node.kind === "connection"
+				? connectionFailures.value[node.id]
+				: leaf?.title,
 		connected:
 			node.kind === "connection" &&
 			connections.status[node.id] === "connected",
@@ -838,18 +1046,20 @@ function editConnection(): void {
 
 /**
  * Reveals whatever the active tab points at: opens its ancestors, selects the
- * row and scrolls it into view, so the sidebar says where the work in the
- * workspace came from.
+ * row and scrolls it into view, so the sidebar says where the work came from.
  *
  * Each ancestor is loaded as it is opened, because `flattenTree` only emits a
  * child whose key is in `expanded` *and* whose parent has cached children — so
- * this costs exactly the queries clicking down to the row by hand would. The
- * target is resolved after each load, which is also why a tab whose connection
- * was deleted (or whose container has gone) simply does nothing.
+ * this costs the queries clicking down by hand would. The target is resolved
+ * after each load, which is why a tab whose connection was deleted does nothing.
  */
 async function locateActiveTab(): Promise<void> {
 	const tab = tabs.activeTab;
 	if (!tab) return;
+
+	// Locating a tab is a crawl like any other: it walks containers and writes
+	// as it goes, so it claims the tree and stops if a search overtakes it.
+	const superseded = claimCrawl();
 
 	const connection = roots.value.find(
 		(node): node is Extract<TreeNode, { kind: "connection" }> =>
@@ -858,7 +1068,8 @@ async function locateActiveTab(): Promise<void> {
 	if (!connection) return;
 
 	setExpanded(connection.key, true);
-	await loadChildren(connection);
+	await loadChildren(connection, superseded);
+	if (superseded()) return;
 
 	// The tab names both a database and a schema; the tree's rows carry them as
 	// fields, which is what identifies a row without relying on its key. MySQL
@@ -871,7 +1082,8 @@ async function locateActiveTab(): Promise<void> {
 	if (!database) return;
 
 	setExpanded(database.key, true);
-	await loadChildren(database);
+	await loadChildren(database, superseded);
+	if (superseded()) return;
 
 	const schema = (childrenOf(database) ?? []).find(
 		(node): node is Extract<TreeNode, { kind: "schema" }> =>
@@ -881,7 +1093,8 @@ async function locateActiveTab(): Promise<void> {
 
 	if (schema) {
 		setExpanded(schema.key, true);
-		await loadChildren(schema);
+		await loadChildren(schema, superseded);
+		if (superseded()) return;
 	}
 
 	// A query tab names no table, so the deepest row it can resolve to is its
@@ -897,7 +1110,8 @@ async function locateActiveTab(): Promise<void> {
 		if (table) {
 			target = table;
 			setExpanded(table.key, true);
-			await loadChildren(table);
+			await loadChildren(table, superseded);
+			if (superseded()) return;
 		}
 	}
 

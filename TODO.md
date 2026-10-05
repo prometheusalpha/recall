@@ -58,8 +58,17 @@ Phase 9:
 Phase 10:
 - [x] Keyboard shortcuts mechanism / settings, nhất là close others, next/previous tab, close tab
 
+Phase 11:
+- Search tên bảng không ra
+- [x] Khi dùng phím left right để chuyển selection sang cell tận cùng bên trái trong table grid thì lại không cuộn hết hẳn sang trái
+- [x] ctrl + shift + up/down key (macos) để sort cột
+- [x] Hover column / index hiện ra tooltip với nội dung k bị cắt mất khi quá dài
+
 Sau:
+- Sum selection
 - Auto suggest field / table ở editor (code mirror autocomplete logic)
+- Bỏ nút refresh thay bằng cmd + r
+- Màn loading 
 - Gợi ý cột ở where và order by
 - Cơ chế update
 - Redis support

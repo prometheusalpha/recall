@@ -29,6 +29,19 @@ import { useBookmarksStore } from "./stores/bookmarks";
 import { useTabClose } from "./composables/useTabClose";
 import { registerCommand, runCommand, useShortcuts } from "./composables/useShortcuts";
 import { useSqlFilesStore } from "./stores/sqlFiles";
+import { TooltipProvider } from "./components/ui/tooltip";
+
+/**
+ * Hover delay for every tooltip in the app, in ms.
+ *
+ * The primitive defaults to 0, which suits a button with one thing to say and
+ * suits the sidebar tree badly: the pointer sweeps across rows on its way
+ * somewhere, and an instant tooltip on every pass turns the tree into a
+ * flicker. A third of a second is long enough that the pointer has to come to
+ * rest on a row, and short enough that a deliberate hover still answers
+ * immediately.
+ */
+const TOOLTIP_DELAY_MS = 400;
 
 const tabs = useTabsStore();
 // Bookmarks are hydrated once, here: the editor's gutter and the window-level
@@ -115,14 +128,22 @@ function stepTab(direction: 1 | -1): void {
  * quick-open handler. It claims the key with `preventDefault` so
  * `onBookmarkJumpKeydown` — which bails on a `defaultPrevented` event —
  * cannot also act on the same press.
+ *
+ * The claim waits on `runCommand`'s answer on purpose. A command whose
+ * implementation lives somewhere other than this file — the result grid's sort
+ * gestures, which the grid claims itself while it holds focus — resolves to an
+ * id here and has nothing registered against it, and claiming that press would
+ * swallow a key the app is not acting on. Both handlers are window listeners
+ * in one dispatch, so a `preventDefault` set after `runCommand` still reaches
+ * the bookmark handler below it marked.
  */
 function onShortcutKeydown(event: KeyboardEvent): void {
 	// A held key is one action, not a stream of them.
 	if (event.repeat) return;
 	const id = match(event);
 	if (id === null) return;
+	if (!runCommand(id)) return;
 	event.preventDefault();
-	runCommand(id);
 }
 
 function registerShortcutCommands(): void {
@@ -247,25 +268,27 @@ onBeforeUnmount(() => {
 			@quick-open="quickOpen.open.value = !quickOpen.open.value"
 			@toggle-files="filesHidden = !filesHidden"
 		/>
-		<div class="panel-gutter flex min-h-0 flex-1 gap-1 p-1">
-			<AppSidebar
-				v-show="!sidebarHidden"
-				class="shrink-0"
-				:style="{ width: `${sidebarWidth}px` }"
-				@new-connection="openNewConnection"
-				@edit-connection="openEditConnection"
-				@resize="sidebarWidth = $event"
-			/>
-			<QueryWorkspace class="min-w-0 flex-1" />
-			<!-- Docked right: the files list frames the workspace, and a drag
-			     on its left edge does not fight the connections tree. -->
-			<SqlFilesPanel
-				v-show="!filesHidden"
-				class="shrink-0"
-				:style="{ width: `${filesWidth}px` }"
-				@resize="filesWidth = $event"
-			/>
-		</div>
+		<TooltipProvider :delay-duration="TOOLTIP_DELAY_MS">
+			<div class="panel-gutter flex min-h-0 flex-1 gap-1 p-1">
+				<AppSidebar
+					v-show="!sidebarHidden"
+					class="shrink-0"
+					:style="{ width: `${sidebarWidth}px` }"
+					@new-connection="openNewConnection"
+					@edit-connection="openEditConnection"
+					@resize="sidebarWidth = $event"
+				/>
+				<QueryWorkspace class="min-w-0 flex-1" />
+				<!-- Docked right: the files list frames the workspace, and a drag
+				     on its left edge does not fight the connections tree. -->
+				<SqlFilesPanel
+					v-show="!filesHidden"
+					class="shrink-0"
+					:style="{ width: `${filesWidth}px` }"
+					@resize="filesWidth = $event"
+				/>
+			</div>
+		</TooltipProvider>
 		<ConnectionDialog v-model:open="connectionDialogOpen" :edit-id="connectionEditId" />
 		<SnippetsSettings v-model:open="snippetsOpen" />
 		<KeyboardShortcutsSettings v-model:open="shortcutsOpen" />
