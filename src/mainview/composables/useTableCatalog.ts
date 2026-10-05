@@ -76,16 +76,24 @@ const catalogs = new Map<string, DiscoveredCatalog>();
 const CATALOG_TTL_MS = 5 * 60_000;
 
 /**
- * Fan-out caps. The database cap is really a *socket* cap: `driver.databaseScoped`
- * is true for Postgres, so naming a database the session is not in opens that
- * database's own session. Twenty is far above a real server (a stock Postgres
- * contributes three) and low enough that one profile cannot turn a keystroke
- * into a connection storm; schemas share their database's session, so fifty is
- * generous. What the cap costs is stated: a table past it is not in the palette,
- * and stays one sidebar expand away.
+ * How many databases one connection enumerates at once. This bounds *load*, not
+ * coverage: every database the server lists is still chased, so nothing is
+ * silently missing from the palette.
+ *
+ * The earlier version capped the LIST at twenty and dropped the rest, which is
+ * what made a search look half-working — the server returns databases
+ * alphabetically, so the first twenty answered and every later one silently did
+ * not. A cap that hides results is worse than a slow search, because the user
+ * cannot tell it apart from a typo.
+ *
+ * Concurrency is the right thing to bound because it is the thing that costs:
+ * `driver.databaseScoped` is true for Postgres, so naming a database the
+ * session is not already in opens that database's own session. Four keeps a
+ * keystroke from opening twenty sockets while the slowest database is still
+ * being read. Schemas share their database's session, so they are not capped at
+ * all.
  */
-const MAX_DATABASES_PER_CONNECTION = 20;
-const MAX_SCHEMAS_PER_DATABASE = 50;
+const MAX_CONCURRENT_DATABASES = 4;
 
 /**
  * Cache key for one (database, schema), length-prefixed as
@@ -112,9 +120,13 @@ function anyTablesCached(): boolean {
 /**
  * The databases one search chases, in order: the profile's own database first
  * when the server lists it, then the rest as the server returned them. Its own
- * first because that is the database the connection dialog tested, the sidebar
- * expands and every query so far were pointed at — and on Postgres it is
- * answered by the session `connect()` already opened, so it costs nothing.
+ * first because that is the database the connection dialog tested and the
+ * sidebar expands.
+ *
+ * Every database the server lists is kept. Truncating this list is what made a
+ * search look half-working: the server answers alphabetically, so the ones cut
+ * were always the alphabetically-last ones, and a table visible in the sidebar
+ * was unfindable by name. Cost is bounded by {@link MAX_CONCURRENT_DATABASES}.
  */
 function databasesToChase(
 	config: ConnectionConfig,
@@ -124,11 +136,9 @@ function databasesToChase(
 		.map((entry) => entry.name)
 		.filter((name) => name.length > 0);
 	const own = config.database;
-	const ordered =
-		own.length > 0 && names.includes(own)
-			? [own, ...names.filter((name) => name !== own)]
-			: names;
-	return ordered.slice(0, MAX_DATABASES_PER_CONNECTION);
+	return own.length > 0 && names.includes(own)
+		? [own, ...names.filter((name) => name !== own)]
+		: names;
 }
 
 /**
@@ -146,7 +156,7 @@ function schemasToChase(config: ConnectionConfig, found: string[]): string[] {
 	const ordered = names.includes(own)
 		? [own, ...names.filter((name) => name !== own)]
 		: names;
-	return ordered.slice(0, MAX_SCHEMAS_PER_DATABASE);
+	return ordered;
 }
 
 /**
@@ -266,33 +276,55 @@ export function useTableCatalog(): TableCatalog {
 		}
 		catalog.databases = databasesToChase(config, found);
 
-		const reasons = await Promise.all(
-			catalog.databases.map(async (database) => {
-				let schemas: string[];
-				if (config.dbType === "postgres") {
-					try {
-						schemas = schemasToChase(
-							config,
-							await connections.listSchemas({ connectionId, database }),
-						);
-					} catch (err) {
-						return errorMessage(err);
-					}
-					catalog.schemas.set(database, schemas);
-				} else {
-					schemas = [database];
+		// Bounded concurrency, not a truncated list: every database the server
+		// named is walked, four at a time. Each one opens its own Postgres
+		// session, so `Promise.all` over a server with many databases would put
+		// them all on the wire at once, while slicing the list would silently
+		// drop the alphabetically-last ones from the results.
+		const reasons: (string | null)[] = [];
+		let next = 0;
+		const workers = Array.from(
+			{ length: Math.min(MAX_CONCURRENT_DATABASES, catalog.databases.length) },
+			async () => {
+				while (next < catalog.databases.length) {
+					const database = catalog.databases[next++];
+					reasons.push(await walkDatabase(config, catalog, connectionId, database));
 				}
-				const listed = await Promise.all(
-					schemas.map((schema) =>
-						cacheScope(catalog, connectionId, database, schema),
-					),
-				);
-				return listed.find((reason) => reason !== null) ?? null;
-			}),
+			},
 		);
+		await Promise.all(workers);
 		// First failure, not all of them: they are near-certainly one cause, and
 		// {@link reportFanOut} shows exactly one reason anyway.
 		return reasons.find((reason) => reason !== null) ?? null;
+	}
+
+	/** One database's schemas and their tables. Never throws. */
+	async function walkDatabase(
+		config: ConnectionConfig,
+		catalog: DiscoveredCatalog,
+		connectionId: string,
+		database: string,
+	): Promise<string | null> {
+		let schemas: string[];
+		if (config.dbType === "postgres") {
+			try {
+				schemas = schemasToChase(
+					config,
+					await connections.listSchemas({ connectionId, database }),
+				);
+			} catch (err) {
+				return errorMessage(err);
+			}
+			catalog.schemas.set(database, schemas);
+		} else {
+			schemas = [database];
+		}
+		const listed = await Promise.all(
+			schemas.map((schema) =>
+				cacheScope(catalog, connectionId, database, schema),
+			),
+		);
+		return listed.find((reason) => reason !== null) ?? null;
 	}
 
 	/**
