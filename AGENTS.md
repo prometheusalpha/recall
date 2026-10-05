@@ -10,3 +10,14 @@
 - Đây là repo electronbun + TS + Vue
 - Ưu tiên dùng tailwindcss cho styling nếu có thể
 - Ưu tiên tách hooks/composables/vue component nếu có thể
+
+# Verify
+- Đừng tin báo cáo "đã sửa xong" của subagent. `bun run typecheck` xanh chỉ chứng minh code compile, không chứng minh bug hết
+- Mọi khẳng định về nguyên nhân bug phải kèm dòng code hoặc số liệu chạy thật
+- Không có test suite. Muốn chắc thì dựng DB thật (docker/orbstack) và chạy driver của project, đừng đoán
+- Sửa xong thì báo user test trước khi tick checkbox trong TODO.md
+
+# Đừng báo xong khi chưa chạy
+- User báo "vẫn lỗi" thì mình sai. Đọc lại code từ đầu, đừng suy ra từ giả định cũ
+- Chạy `hutch electrobun dev` thì KHÔNG tự build renderer. Phải `vite build` trước, nếu không user test code cũ và báo vẫn lỗi
+- Đừng kết luận về connection nào hỏng từ 1 dòng log. Xác định đúng profile trước (xem `sqlite3 ~/Library/Application\ Support/app.recall.desktop/recall.db "SELECT * FROM connections"`)
