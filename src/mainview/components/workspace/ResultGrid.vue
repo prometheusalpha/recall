@@ -31,6 +31,7 @@ import {
 	sampleColumnValues,
 } from "../../lib/gridColumnWidth";
 import { sumCells } from "../../lib/cellSum";
+import { formatCellValue } from "../../lib/formatCell";
 import { toast } from "../../composables/useToast";
 import { errorMessage, rpc } from "../../lib/rpc";
 import {
@@ -441,7 +442,11 @@ const autoColumnWidths = computed<Record<string, number>>(() => {
 		if (resultIndex === undefined || resultIndex < 0) return;
 		fitted[column] = autoColumnWidth({
 			header: column,
-			values: sampleColumnValues(result.rows, resultIndex),
+			values: sampleColumnValues(
+				result.rows,
+				resultIndex,
+				result.columnTypes[resultIndex],
+			),
 			charWidth: charWidth.value,
 		});
 	});
@@ -967,7 +972,7 @@ const editorEl = ref<HTMLInputElement | null>(null);
 function cellText(row: number, col: number): string {
 	const resultCol = columnIndexes.value[col];
 	if (resultCol === undefined) return "";
-	return formatValue(cellAt(rows.value[row], resultCol));
+	return formatValue(cellAt(rows.value[row], resultCol), resultCol);
 }
 
 function startEdit(row: number, col: number): void {
@@ -1381,28 +1386,19 @@ function isNullValue(value: unknown): boolean {
 	return value === null || value === undefined;
 }
 
-/** JSON-safe driver values, normalised to the text the cell shows. */
-function formatValue(value: unknown): string {
-	if (value === null || value === undefined) return "";
-	if (typeof value === "string") return value;
-	if (
-		typeof value === "number" ||
-		typeof value === "boolean" ||
-		typeof value === "bigint"
-	) {
-		return value.toString();
-	}
-	try {
-		return JSON.stringify(value) ?? String(value);
-	} catch {
-		return String(value);
-	}
+/**
+ * A cell as the text it shows. `resultColumn` indexes the result's own
+ * `columnTypes`, which is what separates an instant from a wall clock — after
+ * `toJsonSafe` both are ISO strings, so the type name is the only signal left.
+ */
+function formatValue(value: unknown, resultColumn: number): string {
+	return formatCellValue(value, props.result.columnTypes[resultColumn]);
 }
 
 /** Body text: a NULL cell shows a dim `NULL` marker instead of reading as blank. Editing and copy keep using the raw `formatValue`. */
-function cellDisplayValue(value: unknown): string {
+function cellDisplayValue(value: unknown, resultColumn: number): string {
 	if (isNullValue(value)) return "NULL";
-	return formatValue(value);
+	return formatValue(value, resultColumn);
 }
 
 /**
@@ -1412,9 +1408,9 @@ function cellDisplayValue(value: unknown): string {
  * `formatValue`: an empty cell has no tail to reveal, and a tooltip over it
  * would be an empty box over an empty cell.
  */
-function cellTitle(value: unknown): string | undefined {
+function cellTitle(value: unknown, resultColumn: number): string | undefined {
 	if (isNullValue(value)) return "NULL";
-	const text = formatValue(value);
+	const text = formatValue(value, resultColumn);
 	return text.length > 0 ? text : undefined;
 }
 
@@ -1464,8 +1460,9 @@ const cellTooltipText = computed(() => {
 	if (!cellTooltipArmed.value || hoveredCell.value === null) return null;
 	if (editing.value !== null || dragging.value) return null;
 	const hover = hoveredCell.value;
-	const value = cellAt(rows.value[hover.row], columnIndexes.value[hover.col] ?? 0);
-	return cellTitle(value) ?? null;
+	const resultColumn = columnIndexes.value[hover.col] ?? 0;
+	const value = cellAt(rows.value[hover.row], resultColumn);
+	return cellTitle(value, resultColumn) ?? null;
 });
 
 /** Drops the hover, so a tooltip cannot outlive the pointer position that opened it. */
@@ -1798,6 +1795,7 @@ function rowKey(_row: unknown, index: number): number {
 							<span v-else class="truncate">{{
 								cellDisplayValue(
 									cellAt(item, columnIndexes[columnIndex] ?? 0),
+									columnIndexes[columnIndex] ?? 0,
 								)
 							}}</span>
 						</div>

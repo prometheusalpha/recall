@@ -7,6 +7,8 @@
  * without touching Vue state.
  */
 
+import { formatCellValue } from "./formatCell";
+
 /** Monospace advance width in px, used when no canvas measurement is available. */
 export const GRID_CHAR_WIDTH = 8;
 /** Cell horizontal padding (0.5rem each side) plus the 1px cell border. */
@@ -43,46 +45,35 @@ export function estimateTextWidth(text: string, charWidth: number = GRID_CHAR_WI
 	return units * charWidth;
 }
 
-/** JSON-safe driver values, normalised to the text a cell shows. */
-function formatCellValue(value: unknown): string {
-	if (value === null || value === undefined) return "";
-	if (typeof value === "string") return value;
-	if (
-		typeof value === "number" ||
-		typeof value === "boolean" ||
-		typeof value === "bigint"
-	) {
-		return value.toString();
-	}
-	try {
-		return JSON.stringify(value) ?? String(value);
-	} catch {
-		return String(value);
-	}
-}
-
 /**
  * Head-and-tail sample of one column, rendered to the strings the cells show.
  * Sampling both ends lets a column grow when a later page holds wider values,
  * and a short/malformed row reads as empty rather than throwing.
+ *
+ * `columnType` comes from the result's declared types: it must be the same one
+ * the grid paints with, or an instant measured as UTC gets a width sized for
+ * its local-time rendering.
  */
 export function sampleColumnValues(
 	rows: unknown[][],
 	index: number,
+	columnType?: string,
 	limit: number = GRID_SAMPLE_ROWS,
 ): string[] {
+	const text = (row: unknown[] | undefined): string =>
+		formatCellValue(cellAt(row, index), columnType);
 	const total = Math.max(1, Math.floor(limit));
 	if (rows.length <= total) {
-		return rows.map((row) => formatCellValue(cellAt(row, index)));
+		return rows.map(text);
 	}
 	const headCount = Math.ceil(total / 2);
 	const tailCount = total - headCount;
 	const values: string[] = [];
 	for (let offset = 0; offset < headCount; offset++) {
-		values.push(formatCellValue(cellAt(rows[offset], index)));
+		values.push(text(rows[offset]));
 	}
 	for (let offset = rows.length - tailCount; offset < rows.length; offset++) {
-		values.push(formatCellValue(cellAt(rows[offset], index)));
+		values.push(text(rows[offset]));
 	}
 	return values;
 }

@@ -70,6 +70,17 @@ Phase 12:
 - [x] 12.3 Gợi ý cột ở where và order by, sửa giao diện
 - [x] Bỏ nút refresh thay bằng cmd + r
 
+Phase 13:
+- Các field thời gian bị null toàn bộ, kể cả sql editor result và table grid
+  - Nguyên nhân: Cottontail 0.7.1 đóng gói Bun 1.3.10, `parsePostgresTimestamp` đưa text `timestamptz` vào `Date.parse`. Postgres render offset tròn giờ thành `+00` (không có phút) — JSC từ chối chuỗi đó → Invalid Date → `toJsonSafe` đổi thành `null`. Chỉ `timestamptz` chết, `timestamp` sống vì hàm tự thêm `Z`
+  - Đã ép session `timezone=+05:45` trong `src/bun/drivers/postgres.ts`. Offset có phút thì Postgres render dài ra nên `Date.parse` hiểu được. `+07` không dùng được vì Postgres luôn render offset ngắn nhất từ giá trị thật
+  - Xoá workaround khi Cottontail bản mới hơn bundle fix từ oven-sh/bun#35505 (merged 2026-08-24, tự tách component offset thay vì gọi `Date.parse`). Chưa biết Cottontail bản nào bundle Bun >= 1.4.2 — Cottontail private, không tra được danh sách version. Nâng phải nâng cả `hutch` lẫn `cottontail` trong `hutch.config.ts`, vì `cottontail=0.7.1` đang pin và cũng là default của hutch 0.27.1
+  - Side effect đã biết: `now()::timestamp` và `to_char(now(), ...)` trả giờ +05:45 thay vì giờ server. Ô `timestamptz` trong grid không đổi vì đã ép về UTC. Nếu profile tự set `timezone` trong `urlParams` thì giá trị đó thắng — kể cả `+09:00`, và `timestamptz` sẽ null lại
+
+Phase 14:
+- Auto limit trong sql editor 
+- Keyboard short cut sort cột 
+
 Sau:
 - Màn loading 
 - Cơ chế update

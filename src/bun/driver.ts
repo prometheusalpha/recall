@@ -86,6 +86,19 @@ export interface Driver {
 		schema: string,
 		table: string,
 	): Promise<string>;
+	/**
+	 * Declared type names for a statement's output columns, parallel to the
+	 * column names. `Bun.SQL` reports rows but no result metadata and Cottontail
+	 * does not surface the wire `typeOID`, so the type is asked of the server.
+	 *
+	 * Returns `[]` when the statement is not a read or the server rejects the
+	 * probe, so callers fall back to deriving the type from the values.
+	 */
+	columnTypes(
+		db: SQL,
+		sql: string,
+		columns: string[],
+	): Promise<string[]>;
 }
 
 export const DRIVERS: Record<DatabaseType, Driver> = {
@@ -434,6 +447,41 @@ export function wrapForColumnProbe(sql: string): string {
 	return (
 		`SELECT recall_column_probe.* FROM (SELECT 1 AS recall_seed) AS recall_seed_row ` +
 		`LEFT JOIN (${body}) AS recall_column_probe ON true`
+	);
+}
+
+
+/**
+ * Wrap a read statement so each output column reports its declared type.
+ *
+ * Reuses the seed-row trick from {@link wrapForColumnProbe}, but evaluates
+ * `pg_typeof` against the statement instead of re-deriving the type from a
+ * value. That distinction is the whole point: `timestamptz` and `timestamp
+ * without time zone` both decode to a `Date`, so a value-derived type cannot
+ * tell an instant from a wall clock, and only the instant may be re-rendered
+ * into the display timezone.
+ *
+ * The inner `LIMIT 0` is what makes it cheap. Without it the seed-row `LEFT
+ * JOIN` really does evaluate the user's query, so probing `select … from a
+ * 200 000-row table` cost a second full scan per statement — measured, not
+ * assumed. Postgres fixes a subquery's output types at plan time, so the
+ * `pg_typeof` projection is answered from the plan alone.
+ *
+ * One alias per column, keyed by the column name, so the reply cannot drift
+ * out of order relative to `columns`.
+ */
+export function wrapForColumnTypeProbePlanOnly(
+	sql: string,
+	columns: string[],
+): string {
+	const body = sql.trim().replace(/;\s*$/, "");
+	const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
+	const projection = columns
+		.map((column) => `pg_typeof(probe.${quote(column)})::text AS ${quote(column)}`)
+		.join(", ");
+	return (
+		`SELECT ${projection} FROM (SELECT 1 AS recall_seed) AS recall_seed_row ` +
+		`LEFT JOIN (SELECT * FROM (${body}) AS recall_planned LIMIT 0) AS probe ON true`
 	);
 }
 

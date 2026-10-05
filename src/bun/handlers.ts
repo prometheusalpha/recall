@@ -8,6 +8,7 @@ import type {
 	ExecuteResult,
 	StatementResult,
 } from "../shared/types";
+import type { Driver } from "./driver";
 import {
 	columnTypeName,
 	driverFor,
@@ -126,6 +127,7 @@ function readResultMeta(result: unknown[]): {
  */
 async function runStatement(
 	db: SQL,
+	driver: Driver,
 	statement: string,
 	statementIndex: number,
 	maxRows: number,
@@ -136,12 +138,17 @@ async function runStatement(
 		rows: unknown[][],
 		columns: string[],
 		affectedRows: number,
+		declaredTypes: string[] = [],
 	): StatementResult => ({
 		statementIndex,
 		sql: statement,
 		columns,
-		columnTypes: columns.map((_, index) =>
-			columnTypeName(rows.find((row) => row[index] !== null)?.[index]),
+		// A server-declared type wins; a column the probe could not type falls
+		// back to what its values look like.
+		columnTypes: columns.map(
+			(_, index) =>
+				declaredTypes[index] ||
+				columnTypeName(rows.find((row) => row[index] !== null)?.[index]),
 		),
 		rows,
 		affectedRows,
@@ -183,13 +190,23 @@ async function runStatement(
 		records.length > 0
 			? Object.keys(records[0])
 			: await probeStatementColumns(db, statement);
+	// The declared type is asked of the server: a value-derived type calls both
+	// `timestamptz` and `timestamp without time zone` a `Date`, and only the
+	// first is an instant the grid may re-render into the display timezone. An
+	// empty probe answer falls back to the old value-derived guess.
+	const declaredTypes = await driver.columnTypes(db, statement, columns);
 	const capped = maxRows > 0 ? records.slice(0, maxRows) : records;
 	const rows = capped.map((record) =>
 		columns.map((column) => toJsonSafe(record[column])),
 	);
 
 	return {
-		...shell(rows, columns, readResultMeta(fetched).count ?? rows.length),
+		...shell(
+			rows,
+			columns,
+			readResultMeta(fetched).count ?? rows.length,
+			declaredTypes,
+		),
 		truncated: records.length > capped.length,
 	};
 }
@@ -464,9 +481,11 @@ export const handlers = {
 		const results: StatementResult[] = [];
 		cancelledExecutions.delete(executionId);
 
-		for (const [index, statement] of statements.entries()) {
+	const driver = driverFor(config.dbType);
+	for (const [index, statement] of statements.entries()) {
 			const result = await runStatement(
 				db,
+				driver,
 				statement,
 				index,
 				maxRows,

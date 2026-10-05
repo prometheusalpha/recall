@@ -367,6 +367,16 @@ export const mysqlDriver: Driver = {
 			.find(([key]) => key === "createtable" || key === "createview")?.[1];
 		return createStatement == null ? "" : String(createStatement);
 	},
+
+	/**
+	 * MySQL exposes no per-result column metadata on a plain query, and unlike
+	 * Postgres there is no `pg_typeof` equivalent to evaluate against the user's
+	 * statement. Reporting `[]` sends the caller back to deriving the type from
+	 * the values, which is the pre-existing behaviour.
+	 */
+	async columnTypes(): Promise<string[]> {
+		return [];
+	},
 };
 
 /**

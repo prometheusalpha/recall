@@ -9,8 +9,37 @@ import type {
 	TriggerInfo,
 } from "../../shared/types";
 import type { Driver, SQLOptions } from "../driver";
-import { normalizeBackendError, parseUrlParams } from "../driver";
+import {
+	isReadStatement,
+	normalizeBackendError,
+	parseUrlParams,
+	wrapForColumnTypeProbePlanOnly,
+} from "../driver";
 
+/**
+ * Session timezone forced on every session, unless the profile sets its own
+ * `timezone` in `urlParams`.
+ *
+ * Cottontail 0.7.1 bundles Bun 1.3.10, whose `parsePostgresTimestamp` hands
+ * `timestamptz` text to `Date.parse`. Postgres renders a whole-hour offset as
+ * `+00` with no minutes, which is not a JS date format, so the cell decodes to
+ * an Invalid Date and `toJsonSafe` turns that into `null` — every
+ * `timestamptz` cell renders as NULL. Bun parses `±HH:MM` correctly, so any
+ * offset carrying minutes avoids the bug.
+ *
+ * `+07` does NOT work: Postgres renders the offset from the actual value in
+ * its shortest form, so a whole-hour zone still prints `+07`. Only an offset
+ * with non-zero minutes prints long enough to survive.
+ *
+ * This is a workaround, not a fix. It shifts the session timezone, so
+ * `now()::timestamp` and `to_char(now(), ...)` report +05:45 rather than the
+ * server default. `timestamptz` cells in the grid are unaffected — the driver
+ * normalises them to UTC before they leave the Bun side.
+ *
+ * Remove once Cottontail bundles the fix from oven-sh/bun#35505, which parses
+ * the offset components itself instead of calling `Date.parse`.
+ */
+const FORCED_SESSION_TIMEZONE = "+05:45";
 /** Postgres runtime parameters `ConnectionConfig.urlParams` may carry. */
 const PG_RUNTIME_PARAMS = new Set([
 	"sslmode",
@@ -55,6 +84,12 @@ export const postgresDriver: Driver = {
 				// search_path, statement_timeout, …); Bun forwards it in `connection`.
 				runtime[key] = value;
 			}
+		}
+
+		// See FORCED_SESSION_TIMEZONE: an explicit `timezone` in the profile's
+		// urlParams wins, since the user stated it deliberately.
+		if (runtime.timezone === undefined) {
+			runtime.timezone = FORCED_SESSION_TIMEZONE;
 		}
 
 		return {
@@ -478,6 +513,32 @@ export const postgresDriver: Driver = {
 		}
 
 		return out.join(";\n\n") + ";";
+	},
+
+	async columnTypes(
+		db: SQL,
+		sql: string,
+		columns: string[],
+	): Promise<string[]> {
+		if (columns.length === 0 || !isReadStatement(sql)) return [];
+		try {
+			const rows = (await db.unsafe(
+				wrapForColumnTypeProbePlanOnly(sql, columns),
+			)) as unknown;
+			if (!Array.isArray(rows) || rows.length === 0) return [];
+			const first = rows[0];
+			if (first === null || typeof first !== "object" || Array.isArray(first)) {
+				return [];
+			}
+			const row = first as Record<string, unknown>;
+			// One alias per column, so the answer cannot drift out of order.
+			return columns.map((column) => {
+				const value = row[column];
+				return value == null ? "" : String(value);
+			});
+		} catch {
+			return [];
+		}
 	},
 };
 
