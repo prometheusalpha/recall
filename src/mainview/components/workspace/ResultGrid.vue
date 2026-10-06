@@ -30,7 +30,7 @@ import {
 	measureCharWidth,
 	sampleColumnValues,
 } from "../../lib/gridColumnWidth";
-import { sumCells } from "../../lib/cellSum";
+import { sumCells, type SumCell } from "../../lib/cellSum";
 import { formatCellValue } from "../../lib/formatCell";
 import { toast } from "../../composables/useToast";
 import { errorMessage, rpc } from "../../lib/rpc";
@@ -548,15 +548,19 @@ const selection = useGridSelection({
 /**
  * The sum over the SELECTED RECTANGLE, or `null` when there is no selection —
  * so the statusbar renders nothing at all rather than a misleading `Sum 0`.
- * Cells that are not numbers (NULL, text, JSON) are SKIPPED and counted rather
- * than coerced, and the raw value is read through `cellAt` instead of the
- * formatted text, because separators or a suffix in a display string would
- * make a perfectly good number look non-numeric.
+ * Non-numeric cells (NULL, text, JSON) are SKIPPED and counted rather than
+ * coerced, and the raw value is read through `cellAt` instead of the formatted
+ * text, because separators or a suffix in a display string would make a
+ * perfectly good number look non-numeric.
+ *
+ * The declared column type travels with each cell: `Bun.SQL` returns a Postgres
+ * `numeric`/`bigint`/`money` as a string, and without the type `sumCells` would
+ * skip the whole column.
  */
 const selectionSum = computed<ReturnType<typeof sumCells> | null>(() => {
 	const r = selection.range.value;
 	if (!r || selection.selectedCellCount.value === 0) return null;
-	const values: unknown[] = [];
+	const cells: SumCell[] = [];
 	for (let row = r.startRow; row <= r.endRow; row++) {
 		for (let col = r.startCol; col <= r.endCol; col++) {
 			// `col` indexes the VISIBLE columns, so it has to be translated
@@ -564,10 +568,13 @@ const selectionSum = computed<ReturnType<typeof sumCells> | null>(() => {
 			// otherwise hiding a column shifts every value to its right.
 			const resultCol = columnIndexes.value[col];
 			if (resultCol === undefined) continue;
-			values.push(cellAt(rows.value[row], resultCol));
+			cells.push({
+				value: cellAt(rows.value[row], resultCol),
+				columnType: props.result.columnTypes[resultCol],
+			});
 		}
 	}
-	return sumCells(values);
+	return sumCells(cells);
 });
 
 /** The grid owns focus while the user is navigating cells, so arrows move the

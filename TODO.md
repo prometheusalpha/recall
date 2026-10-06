@@ -61,7 +61,7 @@ Phase 10:
 Phase 11:
 - [x] Search tên bảng không ra
 - [x] Khi dùng phím left right để chuyển selection sang cell tận cùng bên trái trong table grid thì lại không cuộn hết hẳn sang trái
-- [x] ctrl + shift + up/down key (macos) để sort cột
+- [x] ctrl + shift + up/down key (macos) để sort cột (không phải nút option đâu)
 - [x] Hover column / index hiện ra tooltip với nội dung k bị cắt mất khi quá dài
 
 Phase 12:
@@ -78,8 +78,13 @@ Phase 13:
   - Side effect đã biết: `now()::timestamp` và `to_char(now(), ...)` trả giờ +05:45 thay vì giờ server. Ô `timestamptz` trong grid không đổi vì đã ép về UTC. Nếu profile tự set `timezone` trong `urlParams` thì giá trị đó thắng — kể cả `+09:00`, và `timestamptz` sẽ null lại
 
 Phase 14:
+- Sum selection skip mọi số valid
+- Thêm cơ chế select + shift + select another cell -> select range, ở cả result grid và table grid
+
+Phase 15:
 - Auto limit trong sql editor 
-- Keyboard short cut sort cột 
+- Suggest field trong editor
+- Cột tự điều chỉnh width theo nội dung / title, có min max nhất định
 
 Sau:
 - Màn loading 
