@@ -51,7 +51,7 @@ proxy** declared in `src/shared/rpc.ts`:
 | `src/bun/drivers/` | `postgres.ts`, `mysql.ts` — **the only** files allowed to know a dialect |
 | `src/bun/` | `handlers.ts`, `rpc.ts`, `connectionPool.ts`, `driver.ts`, `appDb.ts`, `connectionStore.ts`, `bookmarkStore.ts`, `credentialStore.ts`, `sqlFiles.ts`, `menu.ts`, `index.ts` |
 | `src/mainview/stores/` | 6 Pinia setup stores: `connections`, `tabs`, `query`, `sqlFiles`, `bookmarks`, `snippets` |
-| `src/mainview/composables/` | `useQuickOpen`, `useGridSelection`, `useToast`, `useTheme`, `usePanelResize`, `useFlatTree` |
+| `src/mainview/composables/` | `useQuickOpen`, `useGridSelection`, `useToast`, `useTheme`, `useUiScale`, `usePanelResize`, `useFlatTree` |
 | `src/mainview/lib/` | `rpc.ts` (proxy), `sqlSplit.ts`, `sqlDialect.ts`, `fuzzy.ts`, `cn.ts`, `fileDatasource.ts`, `connectionDefaults.ts` |
 | `src/mainview/components/` | `layout/`, `workspace/`, `sidebar/`, `files/`, `dialogs/`, `quickopen/`, `editor/`, `ui/` (shadcn-vue primitives) |
 
@@ -60,8 +60,8 @@ State lives in **three** places, deliberately:
 - **OS keychain** — passwords only (`src/bun/credentialStore.ts`).
 - **localStorage** — `recall.tabs`, `recall.snippets`, `recall.sqlFileFolders`,
   `recall.sqlFileFilter`, `recall.sqlFileBindings`, `recall.theme`,
-  `recall.resultPaneSize`, `recall.panel.sidebar`, `recall.panel.files`,
-  `recall.connections` (legacy, read-once-then-delete).
+  `recall.uiScale`, `recall.resultPaneSize`, `recall.panel.sidebar`,
+  `recall.panel.files`, `recall.connections` (legacy, read-once-then-delete).
 
 ## Development Commands
 
