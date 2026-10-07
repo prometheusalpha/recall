@@ -1,5 +1,5 @@
 import { BrowserWindow, Updater } from "electrobun/main";
-import { rpc } from "./rpc";
+import { rpc, setPageZoomApplier } from "./rpc";
 import { closeAllConnections } from "./connectionPool";
 import { setupApplicationMenu } from "./menu";
 
@@ -51,5 +51,10 @@ const mainWindow = new BrowserWindow({
 mainWindow.on("close", () => {
 	void closeAllConnections();
 });
+
+// The renderer keeps the chosen zoom in localStorage and re-applies it on every
+// load, because a webview's zoom does not survive a restart. This is the only
+// path from that request to the webview.
+setPageZoomApplier((scale) => mainWindow.setPageZoom(scale));
 
 console.log("Recall started!");

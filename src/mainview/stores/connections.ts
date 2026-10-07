@@ -29,7 +29,17 @@ function isDatabaseType(value: unknown): value is DatabaseType {
 	return value === "postgres" || value === "mysql";
 }
 
-function isStoredConfig(value: unknown): value is ConnectionProfile {
+/**
+ * A profile as an older version wrote it. `hiddenDatabases` is optional here
+ * and only here: the blob below was written by versions that had no such
+ * field, and `readLegacyProfiles` fills it in before anything else sees the
+ * profile.
+ */
+type StoredConfig = Omit<ConnectionProfile, "hiddenDatabases"> & {
+	hiddenDatabases?: string[];
+};
+
+function isStoredConfig(value: unknown): value is StoredConfig {
 	if (!value || typeof value !== "object") return false;
 	return (
 		"id" in value &&
@@ -62,7 +72,13 @@ function isStoredConfig(value: unknown): value is ConnectionProfile {
 		"savePassword" in value &&
 		typeof value.savePassword === "boolean" &&
 		"showSystemSchemas" in value &&
-		typeof value.showSystemSchemas === "boolean"
+		typeof value.showSystemSchemas === "boolean" &&
+		// Optional because this guard also reads the pre-SQLite `localStorage`
+		// blob, written by versions that had no such field. Requiring it would
+		// drop every profile those users still have.
+		(!("hiddenDatabases" in value) ||
+			(Array.isArray(value.hiddenDatabases) &&
+				value.hiddenDatabases.every((name) => typeof name === "string")))
 	);
 }
 
@@ -87,7 +103,13 @@ function readLegacyProfiles(): ConnectionProfile[] {
 		return [];
 	}
 	if (!Array.isArray(parsed)) return [];
-	return parsed.filter(isStoredConfig);
+	return parsed.filter(isStoredConfig).map((profile) => ({
+		...profile,
+		// Backfilled rather than left out: the write that follows sends this
+		// object over RPC, and a missing list would reach SQLite as `undefined`
+		// and fail the column's NOT NULL.
+		hiddenDatabases: profile.hiddenDatabases ?? [],
+	}));
 }
 
 /** Projects the profile list for the database, dropping every password. */

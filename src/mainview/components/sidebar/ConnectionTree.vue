@@ -6,6 +6,7 @@ import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
 import { Columns3, Database, Folder, Key, Link, Pencil, RefreshCw, Search, Table2, Zap } from "lucide-vue-next";
 import { useDebounceFn } from "@vueuse/core";
 import DatabaseIcon from "../icons/DatabaseIcon.vue";
+import DatabaseVisibilityDialog from "../dialogs/DatabaseVisibilityDialog.vue";
 import TreeRow from "./TreeRow.vue";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -182,6 +183,14 @@ const menuOpen = ref(false);
  */
 const menuAnchor = ref({ x: 0, y: 0 });
 
+/**
+ * The profile whose databases are being shown or hidden, and whether that
+ * dialog is open. Held beside the context menu rather than inside it because
+ * the menu closes as the dialog opens.
+ */
+const visibilityId = ref<string | null>(null);
+const visibilityOpen = ref(false);
+
 /** The virtual scroller, for scrolling a row the user cannot currently see. */
 const scroller = ref<{ scrollToItem: (index: number) => void } | null>(null);
 
@@ -336,13 +345,23 @@ const searchFilter = computed(() => parseSearch(searchTerm.value));
  */
 async function databaseNodes(connectionId: string): Promise<TreeNode[]> {
 	const databases = await connections.listDatabases(connectionId);
-	return databases.map((entry) => ({
-		kind: "database",
-		key: makeKey("database", connectionId, entry.name),
-		connectionId,
-		database: entry.name,
-		label: entry.name,
-	}));
+	// The profile's own database is exempt here exactly as it is in the Quick
+	// Open catalog: the dialog refuses to hide it, so only a hand-edited
+	// profile reaches this line with it hidden, and a connection that expands
+	// to nothing is indistinguishable from one that failed.
+	const config = connections.configs.find((entry) => entry.id === connectionId);
+	const hidden = new Set(
+		(config?.hiddenDatabases ?? []).filter((name) => name !== config?.database),
+	);
+	return databases
+		.filter((entry) => !hidden.has(entry.name))
+		.map((entry) => ({
+			kind: "database",
+			key: makeKey("database", connectionId, entry.name),
+			connectionId,
+			database: entry.name,
+			label: entry.name,
+		}));
 }
 
 /**
@@ -1044,6 +1063,44 @@ function editConnection(): void {
 	emit("edit-connection", menuConnectionId.value);
 }
 
+/** Opens the show/hide dialog for the row the context menu was opened on. */
+function manageDatabases(): void {
+	if (!menuConnectionId.value) return;
+	visibilityId.value = menuConnectionId.value;
+	visibilityOpen.value = true;
+}
+
+/**
+ * Rebuilds one connection's rows after the dialog wrote a new hidden list.
+ *
+ * The subtree cache is dropped rather than filtered: what a database that is
+ * being hidden had underneath it — schemas, tables, their loaded metadata — is
+ * exactly what must not survive being shown again, since the fetch happened
+ * under a different hidden list. What replaces it depends on what the tree is
+ * showing: a search re-crawls, an unfiltered tree refetches only the containers
+ * that were dropped *and* are still open, because `loadChildren` skips every
+ * node the drop did not touch.
+ */
+async function onDatabasesChanged(connectionId: string): Promise<void> {
+	dropConnectionLists(connectionId);
+	// With a term typed the tree *is* a search result, and only a fresh crawl
+	// rebuilds it consistently: a filter crawl opens containers as it goes, so
+	// refetching just the ones already open would leave the rest of the tree
+	// short of matches. This is what the watcher does for a new term, with the
+	// same term.
+	if (searchFilter.value !== "") {
+		crawlGeneration++;
+		await runSearch(searchFilter.value);
+		return;
+	}
+	const superseded = claimCrawl();
+	try {
+		await reloadOpenContainers(superseded);
+	} catch (err) {
+		toast(errorMessage(err));
+	}
+}
+
 /**
  * Reveals whatever the active tab points at: opens its ancestors, selects the
  * row and scrolls it into view, so the sidebar says where the work came from.
@@ -1215,7 +1272,19 @@ defineExpose({ collapseAll, locateActiveTab });
 					<Pencil aria-hidden="true" />
 					Edit connection
 				</DropdownMenuItem>
+				<!-- Last: it is the one action here that configures the tree
+				     itself rather than the session behind it. -->
+				<DropdownMenuItem :disabled="!menuConnectionId" @select="manageDatabases">
+					<Database aria-hidden="true" />
+					Databases…
+				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
+
+		<DatabaseVisibilityDialog
+			v-model:open="visibilityOpen"
+			:connection-id="visibilityId"
+			@changed="onDatabasesChanged"
+		/>
 	</div>
 </template>

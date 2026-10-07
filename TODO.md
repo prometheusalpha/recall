@@ -85,6 +85,7 @@ Phase 14:
 - Tab auto width
 
 Phase 15:
+- Highlight màu text cột theo kiểu dữ liệu
 - Auto limit trong sql editor 
 - Suggest field trong editor
 

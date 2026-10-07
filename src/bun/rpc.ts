@@ -28,14 +28,35 @@ import {
 let lastFolder: string | null = null;
 
 /**
- * The two handlers that cannot live in `./handlers`.
+ * Applies a zoom level to the running webview. `index.ts` owns the window, so
+ * it hands this over right after construction; until then a zoom request is a
+ * no-op, which is correct — there is no window to zoom yet.
+ */
+let applyPageZoom: ((scale: number) => void) | null = null;
+
+/** Called once by `index.ts` with the main window's `setPageZoom`. */
+export function setPageZoomApplier(applier: (scale: number) => void) {
+	applyPageZoom = applier;
+}
+
+/**
+ * The handlers that cannot live in `./handlers`.
  *
  * `openFileDialog` and `showItemInFolder` come from Electrobun's native FFI
  * library, which only exists inside the packaged app. Importing them into
  * `./handlers` would break the no-Electrobun-import invariant for the sake of
- * two functions.
+ * two functions. Page zoom joins them because it reaches the webview through
+ * the window object, which only this process holds.
  */
 const nativeHandlers = {
+	/**
+	 * Whole-UI zoom. WebKit scales layout, the px-sized grid and the editor
+	 * together, which no renderer-side CSS change can do.
+	 */
+	setUiScale({ scale }: { scale: number }) {
+		applyPageZoom?.(scale);
+	},
+
 	/** Native directory picker. Resolves null when the user cancels. */
 	async pickFolder() {
 		// The key is omitted rather than set to `undefined`: Electrobun merges

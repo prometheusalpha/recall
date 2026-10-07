@@ -136,9 +136,15 @@ function databasesToChase(
 		.map((entry) => entry.name)
 		.filter((name) => name.length > 0);
 	const own = config.database;
-	return own.length > 0 && names.includes(own)
-		? [own, ...names.filter((name) => name !== own)]
-		: names;
+	// The profile's own database is exempt from the hidden list: the dialog
+	// refuses to hide it, and a profile edited by hand must still open the one
+	// it names. Everything else the user hid is dropped here, which is what
+	// keeps it out of the palette as well as out of the sidebar.
+	const hidden = new Set(config.hiddenDatabases);
+	const visible = names.filter((name) => name === own || !hidden.has(name));
+	return own.length > 0 && visible.includes(own)
+		? [own, ...visible.filter((name) => name !== own)]
+		: visible;
 }
 
 /**
@@ -209,6 +215,8 @@ export interface TableCatalog {
 		visit: (cached: CachedTables) => void,
 	): void;
 	reportFanOut(): void;
+	/** Drops everything one connection discovered, so the next search asks again. */
+	invalidate(connectionId: string): void;
 }
 
 /**
@@ -436,5 +444,23 @@ export function useTableCatalog(): TableCatalog {
 		for (const cached of catalog.tables.values()) visit(cached);
 	}
 
-	return { version: cacheVersion, loadTables, eachDiscoveredTable, reportFanOut };
+	/**
+	 * Forgets one connection's discovery. Called when the user hides or shows a
+	 * database: the catalog in hand was built from the previous answer, and
+	 * without this a just-hidden database stays searchable until its TTL runs
+	 * out. The version bump is what makes the palette rebuild its rows now
+	 * rather than on the next keystroke.
+	 */
+	function invalidate(connectionId: string): void {
+		catalogs.delete(connectionId);
+		cacheVersion.value += 1;
+	}
+
+	return {
+		version: cacheVersion,
+		loadTables,
+		eachDiscoveredTable,
+		reportFanOut,
+		invalidate,
+	};
 }

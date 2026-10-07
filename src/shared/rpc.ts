@@ -273,6 +273,15 @@ export type BunRequests = {
 		params: { path: string };
 		response: void;
 	};
+	/**
+	 * Whole-UI zoom, as a multiplier (1 = 100%). Applied as the webview's
+	 * native page zoom rather than a CSS scale, because the grid and the editor
+	 * size themselves in px — a root font-size change would leave them behind.
+	 */
+	setUiScale: {
+		params: { scale: number };
+		response: void;
+	};
 };
 
 /**

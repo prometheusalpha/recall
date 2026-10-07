@@ -20,8 +20,13 @@ import { Input } from "../ui/input";
  */
 const { open, query, items, searching, activate, close } = useQuickOpen();
 
-/** Index into `items` of the row Enter would pick. */
-const highlighted = ref(0);
+/**
+ * The row Enter would pick, held by id rather than by index. Rows stream in
+ * while the fan-out runs, so the list is re-ranked under the reader several
+ * times per search; an index would have to be re-thrown at row 0 on each of
+ * those arrivals, which is what used to drag the scroll back to the top.
+ */
+const highlightedId = ref<string | null>(null);
 const listRef = ref<HTMLElement | null>(null);
 
 const ICON_BY_KIND: Record<QuickOpenItem["kind"], Component> = {
@@ -52,28 +57,44 @@ function segments(label: string): Segment[] {
 	return parts;
 }
 
+/** Where the highlighted row sits in the current list; 0 when it is gone. */
+const highlighted = computed(() => {
+	const at = items.value.findIndex((item) => item.id === highlightedId.value);
+	return at >= 0 ? at : 0;
+});
+
 const highlightedItem = computed<QuickOpenItem | null>(
 	() => items.value[highlighted.value] ?? null,
 );
 
-// A shorter list means the old index can point past the end or at a different
-// row, so the highlight resets rather than following a stale position.
-watch([items, query], () => {
-	highlighted.value = 0;
-});
-
-// Scrolling has to wait for the new rows to be in the DOM.
-watch(highlighted, async () => {
+/**
+ * Brings the highlighted row into view, for the two things that move the
+ * highlight on the user's behalf: a keystroke and an arrow key. Nothing else
+ * calls it. Rows arriving from the fan-out re-rank the list under a reader who
+ * is very likely looking at it, and scrolling for those is what pulled a
+ * scrolled list out from under them.
+ */
+async function scrollToHighlight(): Promise<void> {
 	await nextTick();
 	listRef.value
 		?.querySelector(`#quickopen-row-${highlighted.value}`)
 		?.scrollIntoView({ block: "nearest" });
+}
+
+// A new query is the user's own doing, so the first row is where the highlight
+// belongs. Clearing the id rather than the index: the previous id names a row
+// the new ranking may still hold, and that row is not what was being pointed at.
+watch(query, () => {
+	highlightedId.value = null;
+	void scrollToHighlight();
 });
 
 function move(delta: number): void {
 	const count = items.value.length;
 	if (count === 0) return;
-	highlighted.value = (highlighted.value + delta + count) % count;
+	const next = (highlighted.value + delta + count) % count;
+	highlightedId.value = items.value[next]?.id ?? null;
+	void scrollToHighlight();
 }
 
 function onKeydown(event: KeyboardEvent): void {
@@ -169,7 +190,7 @@ function onKeydown(event: KeyboardEvent): void {
 							: 'text-foreground'
 					"
 					@click="activate(item)"
-					@mouseenter="highlighted = index"
+					@mouseenter="highlightedId = item.id"
 				>
 					<component
 						:is="ICON_BY_KIND[item.kind]"

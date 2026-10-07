@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS connections (
 	note TEXT NOT NULL,
 	save_password INTEGER NOT NULL,
 	show_system_schemas INTEGER NOT NULL,
+	hidden_databases TEXT NOT NULL DEFAULT '[]',
 	position INTEGER NOT NULL
 );
 
@@ -57,6 +58,25 @@ CREATE INDEX IF NOT EXISTS bookmarks_path ON bookmarks(path);
 
 let db: Database | null = null;
 
+/**
+ * Columns added after a release, applied to files that already hold the table.
+ * `CREATE TABLE IF NOT EXISTS` does nothing to an existing `connections` row
+ * set, so a new column needs a step of its own — and `recall.db` is never
+ * deleted, so every install predating the column arrives here with the old
+ * shape. `PRAGMA` rather than a bare `ALTER` in a try/catch: a swallowed error
+ * would leave the column missing and only surface much later, as a fresh
+ * profile written with one field short.
+ */
+function migrate(database: Database): void {
+	const columns = database
+		.query("PRAGMA table_info(connections)")
+		.all() as { name: string }[];
+	if (columns.some((column) => column.name === "hidden_databases")) return;
+	database.run(
+		"ALTER TABLE connections ADD COLUMN hidden_databases TEXT NOT NULL DEFAULT '[]'",
+	);
+}
+
 /** Opens the database on first use, then holds it for the process lifetime. */
 export function appDb(): Database {
 	if (db) return db;
@@ -64,5 +84,6 @@ export function appDb(): Database {
 	mkdirSync(folder, { recursive: true });
 	db = new Database(join(folder, DB_FILE));
 	db.run(SCHEMA);
+	migrate(db);
 	return db;
 }

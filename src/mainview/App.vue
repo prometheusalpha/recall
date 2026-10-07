@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
+import { Minus, Plus } from "lucide-vue-next";
 import ConnectionDialog from "./components/dialogs/ConnectionDialog.vue";
 import AppSidebar from "./components/sidebar/AppSidebar.vue";
 import SqlFilesPanel from "./components/files/SqlFilesPanel.vue";
@@ -21,6 +22,7 @@ import {
 	DialogTitle,
 } from "./components/ui/dialog";
 import { useTheme } from "./composables/useTheme";
+import { useUiScale } from "./composables/useUiScale";
 import { useToast } from "./composables/useToast";
 import { errorMessage, rpc } from "./lib/rpc";
 import { useTabsStore } from "./stores/tabs";
@@ -61,6 +63,14 @@ const MNEMONICS = "abcdefghijklmnopqrstuvwxyz0123456789";
 const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 
 const { theme, toggle } = useTheme();
+
+const {
+	percent: uiSizePercent,
+	canDecrease: uiSizeCanDecrease,
+	canIncrease: uiSizeCanIncrease,
+	apply: applyUiSize,
+	step: stepUiSize,
+} = useUiScale();
 
 const { toast } = useToast();
 
@@ -233,6 +243,9 @@ function handleBeforeUnload(event: BeforeUnloadEvent): void {
 onMounted(() => {
 	rpc.addMessageListener("connectionLost", onConnectionLost);
 	window.addEventListener("beforeunload", handleBeforeUnload);
+	// A webview starts every launch at 100%, so the stored zoom has to be
+	// pushed once the transport is up.
+	applyUiSize();
 	// The dispatcher is registered before its listener is attached so the
 	// first keydown already has implementations to run.
 	registerShortcutCommands();
@@ -307,6 +320,34 @@ onBeforeUnmount(() => {
 					<Button variant="outline" size="sm" class="shrink-0" @click="toggle">
 						{{ theme === "dark" ? "On" : "Off" }}
 					</Button>
+				</div>
+				<!-- The zoom lives on the webview, so it survives every dialog
+				     open and close; only a restart needs it re-applied. -->
+				<div class="flex items-center justify-between border-t border-border pt-3">
+					<span class="text-sm">UI size</span>
+					<div class="flex items-center gap-1">
+						<Button
+							variant="outline"
+							size="icon-sm"
+							:disabled="!uiSizeCanDecrease"
+							aria-label="Smaller interface"
+							@click="stepUiSize(-1)"
+						>
+							<Minus aria-hidden="true" />
+						</Button>
+						<span class="w-9 text-center text-xs tabular-nums text-muted-foreground">
+							{{ uiSizePercent }}%
+						</span>
+						<Button
+							variant="outline"
+							size="icon-sm"
+							:disabled="!uiSizeCanIncrease"
+							aria-label="Larger interface"
+							@click="stepUiSize(1)"
+						>
+							<Plus aria-hidden="true" />
+						</Button>
+					</div>
 				</div>
 				<!-- The footer is a row by default; two labels of this width
 				     overflow it on a narrow dialog, so it wraps instead of

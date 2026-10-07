@@ -220,5 +220,6 @@ export function emptyConnection(dbType: DatabaseType): ConnectionConfig {
 		note: "",
 		savePassword: true,
 		showSystemSchemas: false,
+		hiddenDatabases: [],
 	};
 }

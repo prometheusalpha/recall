@@ -27,6 +27,14 @@ export interface ConnectionConfig {
 	savePassword: boolean;
 	/** Postgres only: list `pg_*`/`information_schema`; mirrors `show_system_schemas`. */
 	showSystemSchemas: boolean;
+	/**
+	 * Database names this profile keeps out of the sidebar and out of Quick
+	 * Open. A list of *hidden* names rather than of visible ones, so a server
+	 * that grows a database shows it without the user visiting the dialog again.
+	 * The profile's own `database` is never hidden: it is the one the connection
+	 * tested and the sidebar opens on.
+	 */
+	hiddenDatabases: string[];
 }
 
 /**

@@ -589,7 +589,10 @@ export const handlers = {
 	},
 
 } satisfies {
-	[K in keyof BunRequests as K extends "pickFolder" | "revealInFolder"
+	[K in keyof BunRequests as K extends
+		| "pickFolder"
+		| "revealInFolder"
+		| "setUiScale"
 		? never
 		: K]: (
 		params: BunRequests[K]["params"],

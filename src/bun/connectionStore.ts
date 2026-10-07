@@ -34,6 +34,7 @@ interface ProfileRow {
 	note: string;
 	save_password: number;
 	show_system_schemas: number;
+	hidden_databases: string;
 }
 
 
@@ -47,8 +48,26 @@ const INSERT = `
 INSERT INTO connections (
 	id, name, db_type, host, port, username, database, default_schema, ssl,
 	url_params, connect_timeout_secs, query_timeout_secs, note, save_password,
-	show_system_schemas, position
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+	show_system_schemas, hidden_databases, position
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+/**
+ * The hidden-database names out of one row. Stored as a JSON array in a TEXT
+ * column, so a hand-edited or truncated file has to degrade to "nothing is
+ * hidden" rather than take the whole profile list down with it. Names are
+ * filtered to strings because the one thing those names are used for is a
+ * comparison, and a `null` in the list would only ever fail to match.
+ */
+function readHiddenDatabases(raw: string): string[] {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return [];
+	}
+	if (!Array.isArray(parsed)) return [];
+	return parsed.filter((name): name is string => typeof name === "string");
+}
 
 
 /**
@@ -77,6 +96,7 @@ export function listConnections(): ConnectionConfig[] {
 		note: row.note,
 		savePassword: row.save_password !== 0,
 		showSystemSchemas: row.show_system_schemas !== 0,
+		hiddenDatabases: readHiddenDatabases(row.hidden_databases),
 	}));
 }
 
@@ -108,6 +128,7 @@ export function saveConnections(profiles: ConnectionProfile[]): void {
 				profile.note,
 				profile.savePassword ? 1 : 0,
 				profile.showSystemSchemas ? 1 : 0,
+				JSON.stringify(profile.hiddenDatabases),
 				position,
 			];
 			insert.run(...values);
