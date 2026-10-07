@@ -1070,9 +1070,26 @@ function isNullAt(row: number, col: number): boolean {
 	return isNullValue(cellAt(rows.value[row], col));
 }
 
-/** The header/row-number chrome for a whole column or row selection. */
+/**
+ * The header/row-number chrome for a whole column or row selection.
+ *
+ * Only when the rectangle genuinely covers the column top to bottom. Testing
+ * row 0 alone — which is what this did — made a click on any cell in the first
+ * row light the header, so one selected cell in the top row read as "the whole
+ * column is selected". A header click runs from row 0 to the last row, so a
+ * real whole-column selection still lights it.
+ */
 function columnIsSelected(col: number): boolean {
-	return selection.isSelected(0, col);
+	const last = rows.value.length - 1;
+	if (last < 0) return false;
+	const range = selection.range.value;
+	if (!range) return false;
+	return (
+		range.startRow === 0 &&
+		range.endRow === last &&
+		col >= range.startCol &&
+		col <= range.endCol
+	);
 }
 
 /**
