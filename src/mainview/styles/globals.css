@@ -301,6 +301,15 @@ body.panel-resizing * {
 		color 100ms ease;
 }
 
+/** A tab sizes to its own title, clamped at both ends: a one-word title must
+    not collapse into a stub, and a long file name must not push its neighbours
+    off screen. Scoped to the strip because StatementBar reuses .tab-pill for
+    compact `#1 12ms` chips. */
+.tab-strip .tab-pill {
+	min-width: 5rem;
+	max-width: 20rem;
+}
+
 /** Hover only lifts the surface — the pointer is transient, so it must not
     compete with the selection for the user's attention. */
 .tab-pill:hover {

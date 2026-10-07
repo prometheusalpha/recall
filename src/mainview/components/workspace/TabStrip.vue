@@ -8,7 +8,7 @@
  * geometry and the strip's own scrolling keeps working.
  */
 import { computed, nextTick, onBeforeUnmount, ref } from "vue";
-import { PinIcon, PinOffIcon, PlusIcon, XIcon } from "lucide-vue-next";
+import { PinIcon, PlusIcon, XIcon } from "lucide-vue-next";
 import { useTabsStore } from "../../stores/tabs";
 import type { Tab } from "../../stores/tabs";
 import { useTabClose } from "../../composables/useTabClose";
@@ -253,10 +253,6 @@ function cancelRename(): void {
 	editingTabId.value = null;
 }
 
-function togglePin(tab: Tab): void {
-	tabsStore.togglePin(tab.id);
-}
-
 function toggleMenuPin(): void {
 	const tab = menuTab.value;
 	if (tab) tabsStore.togglePin(tab.id);
@@ -291,7 +287,7 @@ function closeMenuOthers(): void {
 			/>
 			<div
 				v-else
-				class="tab-pill group"
+				class="tab-pill"
 				role="tab"
 				:data-tab-id="entry.tab.id"
 				:data-active="entry.tab.id === activeId"
@@ -327,7 +323,7 @@ function closeMenuOthers(): void {
 					@keydown.space.stop
 					@blur="commitRename"
 				/>
-				<span v-else class="max-w-40 truncate">
+				<span v-else class="min-w-0 grow truncate">
 					{{ entry.tab.title }}{{ isDirty(entry.tab) ? "*" : "" }}
 				</span>
 
@@ -339,23 +335,6 @@ function closeMenuOthers(): void {
 						@click.stop="requestClose(entry.tab.id)"
 					>
 						<XIcon class="size-3" aria-hidden="true" />
-					</button>
-					<button
-						type="button"
-						class="inline-flex size-4 shrink-0 items-center justify-center rounded-sm opacity-0 transition-opacity hover:bg-accent focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-60"
-						:aria-label="
-							entry.tab.pinned
-								? `Unpin ${entry.tab.title}`
-								: `Pin ${entry.tab.title}`
-						"
-						@click.stop="togglePin(entry.tab)"
-					>
-						<PinOffIcon
-							v-if="entry.tab.pinned"
-							class="size-3"
-							aria-hidden="true"
-						/>
-						<PinIcon v-else class="size-3" aria-hidden="true" />
 					</button>
 				</template>
 			</div>
