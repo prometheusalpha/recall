@@ -6,8 +6,9 @@
  * the columns aligned. Selection is addressed by absolute result indices,
  * never by what the scroller has in the DOM: a range reaches far past the
  * rendered rows, so copy and edit must work on values never painted.
- * Hover text is the tooltip primitive, not a native `title` (clipped at the
- * window edge); a failure is data, so `result.error` renders it centred.
+ * The focused cell's value is read in full from a box pinned over the cells to
+ * its right, opened by selection rather than by hover; a failure is data, so
+ * `result.error` renders it centred.
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { CSSProperties } from "vue";
@@ -392,6 +393,9 @@ watch(
 		if (!(element instanceof HTMLElement)) return;
 		scrollerResizeObserver = new ResizeObserver(() => {
 			measureScrollbarGutter();
+			// The box is placed against the body's box, so a pane that changed
+			// size has to move it before the next selection does.
+			measureBodyBox();
 			// The font is read off a rendered cell, so a pane that changes
 			// which cells are painted has to be allowed to re-read it.
 			measureCellFont();
@@ -499,6 +503,10 @@ function measureCellFont(): void {
  */
 onMounted(() => {
 	void nextTick(measureCellFont);
+	void nextTick(measureBodyBox);
+	// The box closes on a press outside the grid, which no other listener here
+	// sees: the pointer lands in another pane entirely.
+	document.addEventListener("pointerdown", onDocumentPointerDown);
 	void document.fonts?.ready.then(() => {
 		void nextTick(measureCellFont);
 	});
@@ -1104,13 +1112,20 @@ function onCellClick(row: number, col: number, event: MouseEvent): void {
  * Drag state. Pressing a cell anchors the selection there and keeps extending it
  * as the pointer crosses other cells, which is the rectangle a spreadsheet
  * makes — rather than the browser's own text selection.
+ *
+ * A shift-press keeps the existing anchor instead of re-seeding it, so a
+ * shift-click or shift-drag extends from where the selection started. Without
+ * this the pointerdown would collapse the anchor onto the pressed cell and the
+ * following click's `extendSelectionTo` would find nothing left to extend from,
+ * leaving every shift-click a single cell.
  */
 const dragging = ref(false);
 
 function onCellPointerDown(row: number, col: number, event: PointerEvent): void {
 	if (event.button !== 0 || dragging.value) return;
 	dragging.value = true;
-	selection.selectCell({ row, col });
+	if (event.shiftKey) selection.extendSelectionTo({ row, col });
+	else selection.selectCell({ row, col });
 	// The grid owns its own selection, so the browser's text selection — which
 	// would highlight the cell *text* rather than the cells — has to be off for
 	// the whole document, not just for the element the pointer went down on.
@@ -1177,8 +1192,7 @@ onBeforeUnmount(() => {
 	stopCellDrag();
 	stopColumnResize();
 	stopColumnDrag();
-	// A pending open would otherwise arm itself against an unmounted grid.
-	clearCellHover();
+	document.removeEventListener("pointerdown", onDocumentPointerDown);
 	scrollerResizeObserver?.disconnect();
 	scrollerResizeObserver = null;
 });
@@ -1356,9 +1370,6 @@ watch(
 		// the end of an order they were never part of.
 		columnOrder.value = [];
 		stopColumnDrag();
-		// The row indices the parked tooltip recorded belong to the old result,
-		// and the pointer has not moved, so nothing would close it on its own.
-		clearCellHover();
 		// A new result can be short enough to lose the body's vertical
 		// scrollbar, which changes the header's horizontal range.
 		void nextTick(measureScrollbarGutter);
@@ -1409,116 +1420,153 @@ function cellDisplayValue(value: unknown, resultColumn: number): string {
 }
 
 /**
- * Full value for hover; CSS truncation hides the tail and this keeps it.
+ * Full value of a cell, for the box that reveals what CSS truncation hides.
  *
  * `undefined` for an empty cell is the whole reason this is not just
- * `formatValue`: an empty cell has no tail to reveal, and a tooltip over it
- * would be an empty box over an empty cell.
+ * `formatValue`: an empty cell has no tail to reveal, and a box over it would
+ * be an empty box over an empty cell.
  */
-function cellTitle(value: unknown, resultColumn: number): string | undefined {
+function cellFullText(value: unknown, resultColumn: number): string | undefined {
 	if (isNullValue(value)) return "NULL";
 	const text = formatValue(value, resultColumn);
 	return text.length > 0 ? text : undefined;
 }
 
 /**
- * The cell the pointer is on, and the anchor for the one tooltip that answers
- * for all of them. Parked beside the header menu for the same reason: the body
- * is a `RecycleScroller` pool, so a tooltip per cell means pooled-rows ×
- * columns roots for a surface read by sweeping the pointer along a row.
+ * The box that shows the focused cell's value in full, over the cells to its
+ * right. Selection opens it, never hover: a grid is read by sweeping the
+ * pointer along a row, and a box per crossed cell would strobe.
  *
- * The row and column are kept; the text is not. `RecycleScroller` re-patches a
- * pooled view in place, so a value captured at `pointerenter` is the one that
- * view used to show — see `cellTooltipText`, which re-reads it.
+ * One box for the whole grid rather than one per cell. The body is a
+ * `RecycleScroller` pool, so a box per rendered cell is pooled-rows × columns
+ * elements for a surface that has exactly one focused cell.
+ *
+ * Its geometry comes from the scroll offsets and the column widths, never from
+ * the DOM: the arrow keys walk the focus past the rendered window, and a box
+ * that had to find its own cell in the DOM would come up empty exactly then.
  */
-const hoveredCell = ref<{ row: number; col: number; x: number; y: number } | null>(null);
+const PEEK_MAX_WIDTH = 560;
+/** Keeps the box clear of the pane's right edge, where the scrollbar sits. */
+const PEEK_RIGHT_MARGIN = 4;
+
+const gridRootEl = ref<HTMLElement | null>(null);
+
+/** The body's viewport, in the root's coordinates. */
+const bodyBox = ref({ left: 0, top: 0, width: 0, height: 0 });
+const bodyScroll = ref({ top: 0, left: 0 });
+
+/** The layer starts right of the pinned gutter, which must stay on top. */
+const peekLayerWidth = computed(() =>
+	Math.max(0, bodyBox.value.width - ROW_NUMBER_WIDTH),
+);
+
+const peekLayerStyle = computed<CSSProperties>(() => ({
+	left: `${bodyBox.value.left + ROW_NUMBER_WIDTH}px`,
+	top: `${bodyBox.value.top}px`,
+	width: `${peekLayerWidth.value}px`,
+	height: `${bodyBox.value.height}px`,
+}));
 
 /**
- * Whether the open delay has run. Kept apart from `hoveredCell` so leaving a
- * cell before the delay expires cancels the pending open without also having to
- * remember whether it was ever scheduled.
+ * Set by a press outside the grid, cleared by the next selection. Dropping the
+ * box but keeping the selection is deliberate: a click in the connection tree
+ * is not a request to forget what is selected here.
  */
-const cellTooltipArmed = ref(false);
+const peekDismissed = ref(false);
 
-/**
- * Open delay, which the provider's `delayDuration` cannot supply here: `open`
- * is driven below, so the primitive's own delay never runs.
- *
- * Shorter than the header's 400ms because a data cell is a large target and
- * the pointer is already parked on one, and longer than nothing because the
- * way a grid is read is by sweeping along a row — at zero delay every cell
- * crossed would strobe its own popup.
- */
-const CELL_TOOLTIP_DELAY = 250;
-
-let cellTooltipTimer: ReturnType<typeof setTimeout> | null = null;
-
-/**
- * The text the parked tooltip shows, or null when it must stay closed.
- *
- * Derived from `rows` rather than captured at `pointerenter`, so the popup
- * describes the row the pointer is on when it renders even though the element
- * under it has just been re-patched. Empty is closed rather than blank.
- * Editing and drag-select suppress it outright: nothing here can interrupt
- * either, but a popup over the cell being typed into, or over a selection
- * rectangle still being dragged out, is noise, and the grid tracks both.
- */
-const cellTooltipText = computed(() => {
-	if (!cellTooltipArmed.value || hoveredCell.value === null) return null;
-	if (editing.value !== null || dragging.value) return null;
-	const hover = hoveredCell.value;
-	const resultColumn = columnIndexes.value[hover.col] ?? 0;
-	const value = cellAt(rows.value[hover.row], resultColumn);
-	return cellTitle(value, resultColumn) ?? null;
+/** The focused cell, its raw value and that value as text, or null when closed. */
+const peekCell = computed<{
+	row: number;
+	col: number;
+	value: unknown;
+	text: string | null;
+} | null>(() => {
+	if (peekDismissed.value || editing.value !== null) return null;
+	const focus = selection.focus.value;
+	if (!focus) return null;
+	const resultColumn = columnIndexes.value[focus.col];
+	if (resultColumn === undefined) return null;
+	const value = cellAt(rows.value[focus.row], resultColumn);
+	return {
+		row: focus.row,
+		col: focus.col,
+		value,
+		text: cellFullText(value, resultColumn) ?? null,
+	};
 });
 
-/** Drops the hover, so a tooltip cannot outlive the pointer position that opened it. */
-function clearCellHover(): void {
-	hoveredCell.value = null;
-	cellTooltipArmed.value = false;
-	if (cellTooltipTimer !== null) {
-		clearTimeout(cellTooltipTimer);
-		cellTooltipTimer = null;
-	}
-}
+const peekText = computed(() => peekCell.value?.text ?? null);
+const peekIsNull = computed(() => isNullValue(peekCell.value?.value));
 
 /**
- * Arms the tooltip after the delay, cancelling any pending open from the cell
- * the pointer just left. Coordinates are viewport-relative and are captured
- * once: the anchor deliberately does not chase the pointer inside one cell, so
- * a cell read as a whole gets a tooltip that stays still over it.
+ * Where the box goes inside the layer, or null while it stays closed.
+ *
+ * `max-content` so the value reads in one line however far it runs, floored at
+ * the column's own width — any narrower and the cell's truncated text would
+ * show beside the box — and capped so a long JSON value cannot run away.
  */
-function onCellPointerEnter(row: number, col: number, event: PointerEvent): void {
-	clearCellHover();
-	hoveredCell.value = { row, col, x: event.clientX, y: event.clientY };
-	cellTooltipTimer = setTimeout(() => {
-		cellTooltipTimer = null;
-		cellTooltipArmed.value = true;
-	}, CELL_TOOLTIP_DELAY);
-}
-
-function onCellPointerLeave(): void {
-	clearCellHover();
-}
+const peekStyle = computed<CSSProperties | null>(() => {
+	const cell = peekCell.value;
+	if (!cell || cell.text === null) return null;
+	const left =
+		columns.value
+			.slice(0, cell.col)
+			.reduce((sum, name) => sum + widthFor(name), 0) - bodyScroll.value.left;
+	const room = peekLayerWidth.value - left - PEEK_RIGHT_MARGIN;
+	return {
+		left: `${left}px`,
+		top: `${cell.row * ROW_HEIGHT - bodyScroll.value.top}px`,
+		width: "max-content",
+		minWidth: `${widthFor(columns.value[cell.col] ?? "")}px`,
+		maxWidth: `${Math.max(0, Math.min(PEEK_MAX_WIDTH, room))}px`,
+	};
+});
 
 /**
- * The primitive's own close intents — a keypress it treats as dismissal, a
- * pointerdown on the anchor — arrive as `update:open`, and since the tooltip is
- * controlled here they are the only signal that it should be gone. Honouring
- * them by dropping the hover keeps the two halves from disagreeing.
+ * Measures the body's viewport and re-reads the scroll offsets in one pass. The
+ * box is pinned inside a layer clipped to that rectangle, which is what keeps
+ * it out of the header, the status bar, the scrollbar and the gutter.
  */
-function onCellTooltipOpenChange(open: boolean): void {
-	if (!open) clearCellHover();
+function measureBodyBox(): void {
+	const body = scrollerNode();
+	const root = gridRootEl.value;
+	if (!body || !root) return;
+	const bodyRect = body.getBoundingClientRect();
+	const rootRect = root.getBoundingClientRect();
+	bodyBox.value = {
+		left: bodyRect.left - rootRect.left + body.clientLeft,
+		top: bodyRect.top - rootRect.top + body.clientTop,
+		width: body.clientWidth,
+		height: body.clientHeight,
+	};
+	bodyScroll.value = { top: body.scrollTop, left: body.scrollLeft };
+}
+
+/** A press anywhere but the grid closes the box; the selection stays. */
+function onDocumentPointerDown(event: PointerEvent): void {
+	if (peekText.value === null) return;
+	const root = gridRootEl.value;
+	if (root && event.target instanceof Node && root.contains(event.target)) return;
+	peekDismissed.value = true;
 }
 
 /**
- * The body's scroll event, and the recycling guard for the parked tooltip: a
- * wheel scroll moves rows *under a stationary pointer* and fires no pointer
- * event at all, so without this the popup would go on quoting a row that is no
- * longer the one under the cursor.
+ * A fresh focus is a fresh request for the box, and the press that caused it is
+ * also the moment the pane may have been resized while nothing was focused and
+ * no scroll event carried it.
+ */
+watch(selection.focus, () => {
+	if (peekDismissed.value) measureBodyBox();
+	peekDismissed.value = false;
+});
+
+/**
+ * The body's scroll event. The box is placed by coordinates, so it has to be
+ * told where the content moved to, or it would sit over the wrong row.
  */
 function onBodyScroll(): void {
-	clearCellHover();
+	const body = scrollerNode();
+	if (body) bodyScroll.value = { top: body.scrollTop, left: body.scrollLeft };
 	syncHeaderScroll();
 }
 
@@ -1548,7 +1596,11 @@ function rowKey(_row: unknown, index: number): number {
 </script>
 
 <template>
-	<div class="flex h-full min-h-0 flex-1 flex-col" data-slot="result-grid">
+	<div
+		ref="gridRootEl"
+		class="relative flex h-full min-h-0 flex-1 flex-col"
+		data-slot="result-grid"
+	>
 		<!-- Failure: the message, its code and where the server said it is. -->
 		<div
 			v-if="error"
@@ -1781,8 +1833,6 @@ function rowKey(_row: unknown, index: number): number {
 							:data-null="isNullAt(index, columnIndexes[columnIndex] ?? 0)"
 							:data-selected="selection.isSelected(index, columnIndex)"
 							:data-active="selection.isActive(index, columnIndex)"
-							@pointerenter="onCellPointerEnter(index, columnIndex, $event)"
-							@pointerleave="onCellPointerLeave()"
 							@click="onCellClick(index, columnIndex, $event)"
 							@pointerdown="onCellPointerDown(index, columnIndex, $event)"
 							@dblclick="startEdit(index, columnIndex)"
@@ -1850,34 +1900,25 @@ function rowKey(_row: unknown, index: number): number {
 				</DropdownMenuContent>
 			</DropdownMenu>
 
-			<!-- One tooltip for every data cell, and the same reason as the
-			     menu above: the body is a `RecycleScroller` pool over a
-			     scrolling surface, so a tooltip per cell would mount a root
-			     per pooled row per column. Parked here, once, and anchored at
-			     the pointer. `open` is driven by `cellTooltipText` rather than
-			     by the trigger, because the trigger is the zero-size anchor
-			     and the cell's own pointer events are what report the hover. -->
-			<Tooltip :open="cellTooltipText !== null" @update:open="onCellTooltipOpenChange">
-				<!-- `pointer-events-none` is what keeps this from stealing the
-				     hover, the click, or the drag from the cells underneath;
-				     `fixed` because the coordinates are viewport-relative while
-				     the grid sits offset inside the workspace pane. -->
-				<TooltipTrigger as-child>
-					<span
-						class="pointer-events-none fixed size-0"
-						:style="{
-							left: `${hoveredCell?.x ?? 0}px`,
-							top: `${hoveredCell?.y ?? 0}px`,
-						}"
-						aria-hidden="true"
-					/>
-				</TooltipTrigger>
-				<!-- Past the primitive's own `max-w-xs`: the tail this exists for
-				     is longer than any column a user chose, and the content
-				     wraps rather than truncating a second time. Closed renders
-				     no DOM at all, so an empty cell has no empty box. -->
-				<TooltipContent class="max-w-lg">{{ cellTooltipText }}</TooltipContent>
-			</Tooltip>
+			<!-- The focused cell's value in full, over the cells to its right.
+			     The layer is clipped to the body's viewport and starts right of
+			     the pinned gutter, so the box can never reach the header, the
+			     status bar, the scrollbar or the gutter; `pointer-events-none`
+			     keeps every click and drag reaching the cells underneath. -->
+			<div
+				v-if="peekStyle"
+				class="grid-cell-peek-layer"
+				:style="peekLayerStyle"
+				aria-hidden="true"
+			>
+				<div
+					class="grid-cell grid-cell-peek"
+					:style="peekStyle"
+					:data-null="peekIsNull"
+				>
+					<span class="truncate">{{ peekText }}</span>
+				</div>
+			</div>
 
 			<!-- One row, three zones, exactly as DBX lays it out: what came back
 			     and how long it took, the statement that produced it, then the

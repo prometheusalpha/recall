@@ -27,6 +27,8 @@ import { useSnippetsStore } from "../../stores/snippets";
 import { useBookmarksStore } from "../../stores/bookmarks";
 import { useSqlFilesStore } from "../../stores/sqlFiles";
 import { useTheme } from "../../composables/useTheme";
+import { useShortcuts } from "../../composables/useShortcuts";
+import { formatSqlText } from "../../lib/formatSql";
 import { splitSqlStatements } from "../../lib/sqlSplit";
 import { statementAt } from "../../lib/statementAt";
 import { errorMessage, rpc, RPC_TIMEOUTS } from "../../lib/rpc";
@@ -271,6 +273,43 @@ function assignFromShortcut(event: KeyboardEvent): boolean {
 function beginAssignFor(mnemonic: string): boolean {
 	awaitingMnemonic.value = false;
 	return setBookmarkHere(mnemonic);
+}
+
+const { match } = useShortcuts();
+
+/**
+ * `editor.formatSql` from the shortcut table, claimed here rather than at the
+ * window for the same reason the grid claims its sorts: the command needs the
+ * caret and the selection, so the press only means anything while the editor
+ * holds focus. `preventDefault` is what stops the window dispatcher — which
+ * resolves the same id and finds no implementation registered — from passing
+ * the press on, and `match` is what keeps a rebind working.
+ *
+ * Like the grid's chords this is never reached by key repeat: one press is
+ * one format, however long the chord is held.
+ */
+function formatFromShortcut(event: KeyboardEvent): boolean {
+	if (match(event) !== "editor.formatSql") return false;
+	if (event.repeat) return true;
+	// Claimed either way: the webview must not act on a chord the app has
+	// already given a meaning to, empty document or not.
+	event.preventDefault();
+	void editor?.formatSql();
+	return true;
+}
+
+/**
+ * The first line of a formatter failure.
+ *
+ * `sql-formatter` reports a bad token on one line and then, for some inputs,
+ * lists every symbol the grammar would have accepted after it — thousands of
+ * characters. The first line is the part naming the position, which is the
+ * part a user can act on; the rest is capped so a toast cannot turn into a
+ * wall of text.
+ */
+function formatFailureSummary(err: unknown): string {
+	const first = errorMessage(err).split("\n", 1)[0] ?? "";
+	return first.length > 200 ? `${first.slice(0, 200)}…` : first;
 }
 
 const snippetsStore = useSnippetsStore();
@@ -809,6 +848,13 @@ interface EditorHandle {
 	 * two disagree the moment a selection spans a statement boundary.
 	 */
 	statementUnderCaret(): string | null;
+	/**
+	 * Formats the selection, the statement the caret is in, or the whole
+	 * document, and writes the result back as one undoable edit. Silent when
+	 * there is nothing to format, or when the tab is read-only; a parse
+	 * failure is reported by the editor itself.
+	 */
+	formatSql(): Promise<void>;
 	/** Redraws the bookmark gutter after the store changed. */
 	refreshBookmarks(): void;
 	/** Tears the view down; its element goes away with the component. */
@@ -1262,9 +1308,14 @@ async function mountEditor(): Promise<void> {
 				statementOutlineLayer,
 				// Assigning is a DOM event, registered ahead of the keymap:
 				// preventing the default is what stops `Ctrl-Shift-a` from also
-				// jumping to `a`.
+				// jumping to `a`. The format chord rides in the same handler,
+				// behind it, so a mnemonic the user is mid-way through
+				// assigning still swallows the next key.
 				S.Prec.highest(
-					V.EditorView.domEventHandlers({ keydown: assignFromShortcut }),
+					V.EditorView.domEventHandlers({
+						keydown: (event) =>
+							assignFromShortcut(event) || formatFromShortcut(event),
+					}),
 				),
 				S.Prec.highest(V.keymap.of(bookmarkBindings())),
 				V.highlightActiveLine(),
@@ -1394,6 +1445,51 @@ async function mountEditor(): Promise<void> {
 					state.selection.main.head,
 				)?.sql ?? null
 			);
+		},
+		async formatSql() {
+			if (readOnly.value) return;
+			const state = editorView.state;
+			const doc = state.doc;
+			const main = state.selection.main;
+			// A selection is the user naming a range. A caret inside a
+			// statement is narrower than the file. Neither — a caret parked in
+			// the blank space between two statements — is the whole file,
+			// which is what "format this document" means.
+			let from: number;
+			let to: number;
+			if (!main.empty) {
+				from = main.from;
+				to = main.to;
+			} else {
+				const statement = statementAt(doc.toString(), main.head);
+				from = statement?.start ?? 0;
+				to = statement?.end ?? doc.length;
+			}
+			const target = doc.sliceString(from, to);
+			if (target.trim().length === 0) return;
+			let formatted: string;
+			try {
+				formatted = await formatSqlText(target, dbType.value);
+			} catch (err) {
+				toast(`Could not format: ${formatFailureSummary(err)}`, 6000);
+				return;
+			}
+			// The grammar loads on first use, so the user may have typed or
+			// switched tabs while it did. A document that is no longer the one
+			// the range was measured in would be rewritten at the wrong
+			// offsets, so that press formats nothing.
+			if (editorView.state.doc !== doc) return;
+			if (formatted === target) return;
+			editorView.dispatch({
+				changes: { from, to, insert: formatted },
+				// A selection stays a selection over the new text; a caret has
+				// no equivalent offset left, so it lands on the first character
+				// of what was just formatted.
+				selection: main.empty
+					? { anchor: from }
+					: { anchor: from, head: from + formatted.length },
+				scrollIntoView: true,
+			});
 		},
 		refreshBookmarks() {
 			editorView.dispatch({ effects: redrawBookmarks.of(null) });

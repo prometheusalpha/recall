@@ -82,6 +82,7 @@ Phase 14:
 - Thêm cơ chế select + shift + select another cell -> select range, ở cả result grid và table grid
 
 Phase 15:
+- Format sql
 - Auto limit trong sql editor 
 - Suggest field trong editor
 - Cột tự điều chỉnh width theo nội dung / title, có min max nhất định

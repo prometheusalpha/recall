@@ -37,6 +37,7 @@ export type CommandId =
 	| "tab.next"
 	| "tab.prev"
 	| "quickOpen.toggle"
+	| "editor.formatSql"
 	| "result.sortAsc"
 	| "result.sortDesc"
 	| "result.rerun";
@@ -103,6 +104,23 @@ export const SHORTCUT_COMMANDS: CommandDefinition[] = [
 		label: "Quick open",
 		group: "View",
 		defaultBinding: accel("p"),
+	},
+	/*
+	 * Formatting needs the caret and the selection, so it is the editor that
+	 * claims this one, from its own DOM handler, exactly like the grid chords
+	 * below — with no implementation registered here.
+	 *
+	 * Option+Shift+F, spelled with real Alt on every platform rather than
+	 * through `accel`: the chord is the same two modifiers everywhere, and
+	 * neither of them is the Control that `Ctrl-Shift-<letter>` mnemonic
+	 * assigning claims for its 36 slots — a default the app swallowed before
+	 * the command could see it would be no default at all.
+	 */
+	{
+		id: "editor.formatSql",
+		label: "Format SQL",
+		group: "Editor",
+		defaultBinding: { key: "f", meta: false, ctrl: false, shift: true, alt: true },
 	},
 	/*
 	 * Grid-owned chords: the two sorts (which spell out real Control on every
@@ -263,6 +281,11 @@ function renderKey(key: string): string {
  * the symbols in a fixed order with no separators (`⌘⇧W`); elsewhere they are
  * spelled out and joined with `+` (`Ctrl+Shift+W`). Modifier order is always
  * Ctrl, Alt, Shift, then the accel, then the key — on both platforms.
+ *
+ * A modifier that is not held is not printed, on either branch: the accel is
+ * whatever the platform put there, and a binding can deliberately name none of
+ * it (Option+Shift+F does), so printing an accel symbol for one would name a
+ * key that is not part of the chord.
  */
 export function formatBinding(binding: ShortcutBinding): string {
 	if (!IS_MAC) {
@@ -276,7 +299,9 @@ export function formatBinding(binding: ShortcutBinding): string {
 		parts.push(binding.key);
 		return parts.join("+");
 	}
-	const symbols = [binding.meta ? "⌘" : "⌃"];
+	const symbols: string[] = [];
+	if (binding.meta) symbols.push("⌘");
+	if (binding.ctrl) symbols.push("⌃");
 	if (binding.alt) symbols.push("⌥");
 	if (binding.shift) symbols.push("⇧");
 	symbols.push(renderKey(binding.key));
@@ -347,16 +372,28 @@ export function useShortcuts() {
 	 * The dispatcher. Exact on all four modifier flags — that is what keeps
 	 * `⌘W` from firing on `⌘⇧W` — and case-insensitive on a single character,
 	 * so a recorder that stored `"w"` still matches a press of `"W"`.
+	 *
+	 * A binding that names a letter also matches the physical key behind a
+	 * character the layout substituted for it, which is the only way
+	 * `Option-Shift-F` can mean the F key on a keyboard that reports `Ï`.
 	 */
 	function match(event: KeyboardEvent): CommandId | null {
 		if (suspend.value) return null;
 		if (event.defaultPrevented) return null;
 		const key = normalizedKey(event);
 		if (key === null) return null;
+		// A layout translates a letter into another character under some
+		// modifiers — macOS reports `Ï` for `Option-Shift-F`, the way `Shift-1`
+		// reports `!` — so the physical key is read too. Only when the event
+		// named no ordinary letter, so a layout whose letters sit on other keys
+		// (Dvorak) still matches the character it actually typed.
+		const physical = /^[a-z]$/.test(key)
+			? null
+			: (/^Key([A-Z])$/.exec(event.code)?.[1].toLowerCase() ?? null);
 		for (const command of SHORTCUT_COMMANDS) {
 			const binding = bindingFor(command.id);
 			if (
-				binding.key === key &&
+				(binding.key === key || binding.key === physical) &&
 				binding.meta === event.metaKey &&
 				binding.ctrl === event.ctrlKey &&
 				binding.shift === event.shiftKey &&
