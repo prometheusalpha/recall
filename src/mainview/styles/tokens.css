@@ -95,6 +95,19 @@
 	/* Grid selection: a tinted fill for the range; the active cell is outlined
 	   with --primary so a one-cell selection still shows where the caret is. */
 	--data-grid-cell-selected-bg: rgb(191 219 254);
+	/* Cell text wears its column's data type, so a grid is read by shape before
+	   it is read by value. One hue per semantic bucket; a type that matched no
+	   bucket keeps the inherited foreground. Dark-mode values are the lighter
+	   300-level of the same hue: the 700-level reads as mud on a dark cell. */
+	--grid-type-integer-fg: #1d4ed8;
+	--grid-type-numeric-fg: #0e7490;
+	--grid-type-string-fg: #166534;
+	--grid-type-boolean-fg: #c2410c;
+	--grid-type-temporal-fg: #7e22ce;
+	--grid-type-structured-fg: #be185d;
+	--grid-type-identifier-fg: #92400e;
+	--grid-type-binary-fg: #b91c1c;
+	--grid-type-spatial-fg: #047857;
 	--chrome-muted: rgb(240 240 240);
 	/* The grid header sits a shade above the grid body so the column names stay
 	   readable while rows scroll under them. */
@@ -133,6 +146,15 @@
 
 	--chrome: rgb(27 27 30);
 	--data-grid-cell-selected-bg: rgb(30 64 96);
+	--grid-type-integer-fg: #93c5fd;
+	--grid-type-numeric-fg: #67e8f9;
+	--grid-type-string-fg: #86efac;
+	--grid-type-boolean-fg: #fdba74;
+	--grid-type-temporal-fg: #d8b4fe;
+	--grid-type-structured-fg: #f9a8d4;
+	--grid-type-identifier-fg: #fcd34d;
+	--grid-type-binary-fg: #fca5a5;
+	--grid-type-spatial-fg: #6ee7b7;
 	--chrome-muted: rgb(32 32 36);
 	--grid-header: rgb(32 32 34);
 	--gutter: rgb(23 23 25);

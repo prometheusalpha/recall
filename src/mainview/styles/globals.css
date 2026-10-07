@@ -645,6 +645,47 @@ body.panel-resizing * {
 	font-style: italic;
 }
 
+/* Cell text painted by its column's data type. The class rides the `<span>`
+   inside the cell, so `.grid-cell[data-null="true"]` above cannot be beaten
+   by it — a NULL never gets the class at all (see `cellTypeClass`), which is
+   what keeps the muted italic marker. A type that matched no bucket also gets
+   no class and stays on the inherited foreground. */
+.grid-type-integer {
+	color: var(--grid-type-integer-fg);
+}
+
+.grid-type-numeric {
+	color: var(--grid-type-numeric-fg);
+}
+
+.grid-type-string {
+	color: var(--grid-type-string-fg);
+}
+
+.grid-type-boolean {
+	color: var(--grid-type-boolean-fg);
+}
+
+.grid-type-temporal {
+	color: var(--grid-type-temporal-fg);
+}
+
+.grid-type-structured {
+	color: var(--grid-type-structured-fg);
+}
+
+.grid-type-identifier {
+	color: var(--grid-type-identifier-fg);
+}
+
+.grid-type-binary {
+	color: var(--grid-type-binary-fg);
+}
+
+.grid-type-spatial {
+	color: var(--grid-type-spatial-fg);
+}
+
 /* Hover must not repaint a selected cell: both rules carry the same
    specificity, so without the :not() the later one wins and the selection
    disappears the moment the pointer crosses the range. */

@@ -33,6 +33,10 @@ import {
 } from "../../lib/gridColumnWidth";
 import { sumCells, type SumCell } from "../../lib/cellSum";
 import { formatCellValue } from "../../lib/formatCell";
+import {
+	columnTypeClass,
+	resolveColumnVisualKind,
+} from "../../lib/gridColumnType";
 import { toast } from "../../composables/useToast";
 import { errorMessage, rpc } from "../../lib/rpc";
 import {
@@ -1071,6 +1075,28 @@ function isNullAt(row: number, col: number): boolean {
 }
 
 /**
+ * The colour bucket of every result column, resolved once per result rather
+ * than once per painted cell: a column's type is fixed, and this grid repaints
+ * whole rows as they scroll.
+ */
+const columnVisualKinds = computed(() =>
+	props.result.columnTypes.map((type) => resolveColumnVisualKind(type)),
+);
+
+/**
+ * The class that paints a cell's text by its column's type.
+ *
+ * `undefined` on a NULL, because the cell already says `NULL` in a muted
+ * italic and a type colour on it would read as a value. `undefined` again for
+ * a type no bucket claimed, which leaves the cell on the inherited foreground.
+ */
+function cellTypeClass(row: number, visibleColumn: number): string | undefined {
+	const resultColumn = columnIndexes.value[visibleColumn] ?? 0;
+	if (isNullAt(row, resultColumn)) return undefined;
+	return columnTypeClass(columnVisualKinds.value[resultColumn] ?? "unknown");
+}
+
+/**
  * The header/row-number chrome for a whole column or row selection.
  *
  * Only when the rectangle genuinely covers the column top to bottom. Testing
@@ -1514,6 +1540,12 @@ const peekCell = computed<{
 
 const peekText = computed(() => peekCell.value?.text ?? null);
 const peekIsNull = computed(() => isNullValue(peekCell.value?.value));
+/** The box is the focused cell grown, so it carries that cell's type colour. */
+const peekTypeClass = computed(() =>
+	peekIsNull.value
+		? undefined
+		: cellTypeClass(peekCell.value?.row ?? 0, peekCell.value?.col ?? 0),
+);
 
 /**
  * Where the box goes inside the layer, or null while it stays closed.
@@ -1866,7 +1898,11 @@ function rowKey(_row: unknown, index: number): number {
 								@keydown.esc.prevent="cancelEdit"
 								@blur="commitEdit()"
 							>
-							<span v-else class="truncate">{{
+							<span
+								v-else
+								class="truncate"
+								:class="cellTypeClass(index, columnIndex)"
+							>{{
 								cellDisplayValue(
 									cellAt(item, columnIndexes[columnIndex] ?? 0),
 									columnIndexes[columnIndex] ?? 0,
@@ -1933,7 +1969,7 @@ function rowKey(_row: unknown, index: number): number {
 					:style="peekStyle"
 					:data-null="peekIsNull"
 				>
-					<span class="truncate">{{ peekText }}</span>
+					<span class="truncate" :class="peekTypeClass">{{ peekText }}</span>
 				</div>
 			</div>
 
