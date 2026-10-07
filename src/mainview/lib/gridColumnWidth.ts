@@ -19,9 +19,9 @@ export const GRID_CHAR_WIDTH = 8;
  * rounded down by up to 0.5px, so a column sized to the exact 17 ellipsizes its
  * last character.
  */
-export const GRID_CELL_PADDING = 30;
+export const GRID_CELL_PADDING = 40;
 /** Narrowest a column may auto-size to. */
-export const GRID_MIN_AUTO_WIDTH = 30;
+export const GRID_MIN_AUTO_WIDTH = 40;
 /** Widest a column may auto-size to. */
 export const GRID_MAX_AUTO_WIDTH = 900;
 /** How many rows are sampled per column. */
