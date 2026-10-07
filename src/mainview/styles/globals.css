@@ -607,6 +607,17 @@ body.panel-resizing * {
 	width: var(--grid-content-width, 100%);
 	overflow: visible;
 }
+
+/* Every rendered row is promoted to its own GPU layer: the scroller sets an
+   inline `will-change: transform` on each item view, and a grid row is as wide
+   as the whole content. WebKit then checkerboards the not-yet-rasterised band
+   while scrolling — the rows are in the DOM, but their tiles paint as the
+   transparent background, which reads as a black patch. The rows are cheap
+   enough to paint without per-row layers, so the promotion is dropped. */
+.grid-body .vue-recycle-scroller__item-view {
+	will-change: auto !important;
+}
+
 .grid-header-cell {
 	display: flex;
 	align-items: center;
