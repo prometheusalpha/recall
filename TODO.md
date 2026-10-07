@@ -80,12 +80,12 @@ Phase 13:
 Phase 14:
 - Sum selection skip mọi số valid
 - Thêm cơ chế select + shift + select another cell -> select range, ở cả result grid và table grid
+- Cột tự điều chỉnh width theo nội dung / title, có min max nhất định
 
 Phase 15:
 - Format sql
 - Auto limit trong sql editor 
 - Suggest field trong editor
-- Cột tự điều chỉnh width theo nội dung / title, có min max nhất định
 
 Sau:
 - Màn loading 

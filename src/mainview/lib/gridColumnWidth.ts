@@ -11,14 +11,21 @@ import { formatCellValue } from "./formatCell";
 
 /** Monospace advance width in px, used when no canvas measurement is available. */
 export const GRID_CHAR_WIDTH = 8;
-/** Cell horizontal padding (0.5rem each side) plus the 1px cell border. */
-export const GRID_CELL_PADDING = 17;
+/**
+ * Horizontal chrome around the text: `0.5rem` of padding each side plus the
+ * 1px cell border, which is 17px, plus 13px of slack. The slack is not
+ * decoration: the width is arithmetic on a measured advance, while the browser
+ * lays the same text out with its own sub-pixel advances and the total is
+ * rounded down by up to 0.5px, so a column sized to the exact 17 ellipsizes its
+ * last character.
+ */
+export const GRID_CELL_PADDING = 30;
 /** Narrowest a column may auto-size to. */
-export const GRID_MIN_AUTO_WIDTH = 60;
+export const GRID_MIN_AUTO_WIDTH = 30;
 /** Widest a column may auto-size to. */
-export const GRID_MAX_AUTO_WIDTH = 400;
+export const GRID_MAX_AUTO_WIDTH = 900;
 /** How many rows are sampled per column. */
-export const GRID_SAMPLE_ROWS = 50;
+export const GRID_SAMPLE_ROWS = 10;
 
 /**
  * Characters past this length are truncated before measuring: one
