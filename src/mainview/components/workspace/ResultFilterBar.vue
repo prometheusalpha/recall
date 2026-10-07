@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * The band directly above the grid: filter controls on the left, actions on the
- * right. DBX keeps both on one 32px row, so this does too.
+ * right. DBX keeps both on one row, so this does too.
  *
  * WHERE and ORDER BY are passed straight through as raw SQL fragments. The grid
  * re-runs the statement with them appended, which is what makes them a server
@@ -130,29 +130,36 @@ function commit(): void {
 		<!-- Hidden entirely for a query tab: there is no generated statement to
 		     append a WHERE to, so an enabled box here would be a dead end. -->
 		<template v-if="sortable">
-			<ClauseSuggestInput
-				v-model="whereDraft"
-				label="WHERE"
-				:icon="Filter"
-				accent="text-info"
-				placeholder="name = 'Alice'"
-				:columns="columns"
-				:column-types="columnTypes"
-				class="max-w-72"
-				@submit="commit"
-			/>
+			<!-- One frame, two segments. The divider is the only mark between
+			     them, so the pair reads as a single control instead of two
+			     boxes. No `overflow-hidden`: it would clip the suggestion
+			     popup, which is anchored inside a segment. -->
+			<div
+				class="flex min-w-0 max-w-[36rem] flex-1 items-stretch self-stretch border-x bg-background"
+			>
+				<ClauseSuggestInput
+					v-model="whereDraft"
+					label="WHERE"
+					:icon="Filter"
+					accent="text-info"
+					placeholder="name = 'Alice'"
+					:columns="columns"
+					:column-types="columnTypes"
+					@submit="commit"
+				/>
 
-			<ClauseSuggestInput
-				v-model="orderByDraft"
-				label="ORDER BY"
-				:icon="ArrowUpDown"
-				accent="text-warning"
-				placeholder="name ASC"
-				:columns="columns"
-				:column-types="columnTypes"
-				class="max-w-72"
-				@submit="commit"
-			/>
+				<ClauseSuggestInput
+					v-model="orderByDraft"
+					label="ORDER BY"
+					:icon="ArrowUpDown"
+					accent="text-warning"
+					placeholder="name ASC"
+					:columns="columns"
+					:column-types="columnTypes"
+					class="border-l"
+					@submit="commit"
+				/>
+			</div>
 		</template>
 
 		<div class="flex-1" />

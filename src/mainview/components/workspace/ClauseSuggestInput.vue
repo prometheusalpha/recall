@@ -234,18 +234,18 @@ watch(activeIndex, () => {
 </script>
 
 <template>
-	<div ref="root" class="relative min-w-0 flex-1">
+	<div ref="root" class="relative flex min-w-0 flex-1 flex-col">
 		<div
-			class="rounded border bg-background px-1.5 h-6 flex items-center gap-1"
-			:class="cn(open && 'ring-1 ring-ring')"
+			class="flex min-h-0 flex-1 items-center gap-1 px-1.5"
+			:class="cn(open && 'ring-1 ring-inset ring-ring')"
 		>
 			<component
 				:is="icon"
-				class="size-3 shrink-0"
+				class="size-[0.825rem] shrink-0"
 				:class="active ? accent : 'text-muted-foreground'"
 				aria-hidden="true"
 			/>
-			<span class="shrink-0 text-xs font-medium" :class="accent">
+			<span class="shrink-0 text-[0.825rem] font-medium" :class="accent">
 				{{ label }}
 			</span>
 
@@ -260,7 +260,7 @@ watch(activeIndex, () => {
 				aria-autocomplete="list"
 				:aria-expanded="open"
 				:aria-label="`${label} expression`"
-				class="h-5 min-w-0 flex-1 bg-transparent px-0 text-xs outline-none placeholder:text-muted-foreground"
+				class="h-[1.375rem] min-w-0 flex-1 bg-transparent px-0 text-[0.825rem] outline-none placeholder:text-muted-foreground"
 				:placeholder="placeholder"
 				@input="onInput"
 				@keydown="onKeydown"
@@ -270,21 +270,21 @@ watch(activeIndex, () => {
 
 			<button
 				type="button"
-				class="grid size-4 shrink-0 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+				class="grid size-[1.1rem] shrink-0 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
 				:aria-label="`Suggest a column for ${label}`"
 				:aria-expanded="open"
 				@click="open ? close() : show()"
 			>
-				<ChevronDown class="size-3" aria-hidden="true" />
+				<ChevronDown class="size-[0.825rem]" aria-hidden="true" />
 			</button>
 			<button
 				v-if="active"
 				type="button"
-				class="grid size-4 shrink-0 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+				class="grid size-[1.1rem] shrink-0 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
 				:aria-label="`Clear ${label}`"
 				@click="clear"
 			>
-				<X class="size-3" aria-hidden="true" />
+				<X class="size-[0.825rem]" aria-hidden="true" />
 			</button>
 		</div>
 
@@ -295,6 +295,10 @@ watch(activeIndex, () => {
 			:aria-label="`${label} columns`"
 			class="bg-popover text-popover-foreground absolute left-0 top-full z-50 mt-1 max-h-56 min-w-full overflow-y-auto rounded-md border p-1 shadow-md"
 		>
+			<!-- `mousedown.prevent` keeps focus on the input. WebKit does not focus
+			     a button on click, so without it the press blurs the input,
+			     `onFocusOut` closes the list, and the row is gone before its click
+			     ever fires. Chromium focuses the button, which hid this. -->
 			<button
 				v-for="(column, index) in suggestions"
 				:key="column"
@@ -303,6 +307,7 @@ watch(activeIndex, () => {
 				:aria-selected="index === activeIndex"
 				class="flex w-full items-baseline gap-2 rounded-sm px-2 py-1 text-left text-xs"
 				:class="index === activeIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'"
+				@mousedown.prevent
 				@mouseenter="activeIndex = index"
 				@click="pick(column)"
 			>
