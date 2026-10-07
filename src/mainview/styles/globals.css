@@ -386,7 +386,7 @@ body.panel-resizing * {
  */
 .data-grid-font {
 	font-family: var(--font-mono);
-	font-feature-settings: "tnum";
+	font-feature-settings: "tnum", var(--font-mono-features);
 	font-variant-numeric: tabular-nums;
 	font-size: 12px;
 }
@@ -399,6 +399,7 @@ body.panel-resizing * {
 .grid-header-cell,
 .grid-cell {
 	font-family: var(--font-mono);
+	font-feature-settings: var(--font-mono-features);
 	font-variant-numeric: tabular-nums;
 }
 
@@ -414,6 +415,7 @@ body.panel-resizing * {
 	background: var(--chrome);
 	justify-content: flex-end;
 	font-family: var(--font-mono);
+	font-feature-settings: "tnum", var(--font-mono-features);
 	font-variant-numeric: tabular-nums;
 	flex-shrink: 0;
 	/* The gutter is reference, not content, so it sits a step below the values. */
@@ -766,6 +768,7 @@ body.panel-resizing * {
 	background: var(--background);
 	color: var(--foreground);
 	font-family: var(--font-mono);
+	font-feature-settings: var(--font-mono-features);
 	font-size: 13px;
 }
 
@@ -775,6 +778,7 @@ body.panel-resizing * {
 
 .cm-scroller {
 	font-family: var(--font-mono) !important;
+	font-feature-settings: var(--font-mono-features) !important;
 	font-size: 13px !important;
 	line-height: 1.5;
 }

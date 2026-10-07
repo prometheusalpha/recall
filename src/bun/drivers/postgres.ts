@@ -173,6 +173,11 @@ export const postgresDriver: Driver = {
 		schema: string,
 		filter: string,
 	): Promise<TableInfo[]> {
+		// A declarative partition is an ordinary table whose parent is a
+		// partitioned one, so it would otherwise be listed beside that parent.
+		// `pg_inherits` rather than `relispartition` keeps this working on 9.x,
+		// where `relkind` is never `'p'` and the guard matches nothing. Plain
+		// `INHERITS` children have a non-partitioned parent and stay listed.
 		const rows = (await db.unsafe(
 			"SELECT c.relname AS name, " +
 				"c.relkind::text AS relkind, " +
@@ -182,6 +187,10 @@ export const postgresDriver: Driver = {
 				"JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace " +
 				"WHERE n.nspname = $1 " +
 				"AND c.relkind IN ('r', 'p', 'v', 'm', 'f') " +
+				"AND NOT EXISTS ( " +
+				"  SELECT 1 FROM pg_catalog.pg_inherits pi " +
+				"  JOIN pg_catalog.pg_class pp ON pp.oid = pi.inhparent " +
+				"  WHERE pi.inhrelid = c.oid AND pp.relkind = 'p') " +
 				"AND ($2 = '' OR c.relname ILIKE $2) " +
 				"ORDER BY c.relname",
 			[schema, `%${filter}%`],
