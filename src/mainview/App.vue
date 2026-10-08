@@ -27,6 +27,7 @@ import { useToast } from "./composables/useToast";
 import { errorMessage, rpc } from "./lib/rpc";
 import { useTabsStore } from "./stores/tabs";
 import { useConnectionsStore } from "./stores/connections";
+import { useSchemaCatalog } from "./composables/useSchemaCatalog";
 import { useBookmarksStore } from "./stores/bookmarks";
 import { useTabClose } from "./composables/useTabClose";
 import { focusResultFilter } from "./composables/useResultFilterFocus";
@@ -79,6 +80,7 @@ const { toast } = useToast();
 // exists once the backend answers. Hydrating here covers every consumer of the
 // store, and the tree holds its empty state back until it finishes.
 const connections = useConnectionsStore();
+const schemaCatalog = useSchemaCatalog();
 void connections.hydrate();
 
 // The bookmark list is backend-owned, so the jump handler and the editor's
@@ -230,6 +232,9 @@ function openSnippetsSettings(): void {
 /** The backend is the only side that can see a socket die on its own. */
 function onConnectionLost(payload: { connectionId: string; reason: string }): void {
 	connections.markLost(payload.connectionId);
+	// Column lists are cache-first, and a list read through a dead socket is
+	// worse than none: drop them so the editor re-lists after the reconnect.
+	schemaCatalog.invalidateConnection(payload.connectionId);
 	// Sticky, not the 4s default: the only way back is the button, and a toast
 	// that times out turns a recoverable drop into a dead tab.
 	toast(`Connection lost: ${payload.reason}`, 0, {

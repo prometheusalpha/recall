@@ -69,6 +69,7 @@ import {
 	schemaCompletionSource,
 	type SchemaCompletionContext,
 } from "../editor/SqlSchemaCompletionSource";
+import { referencedTablesIn } from "../editor/SqlStatementScope";
 import { useSchemaCatalog } from "../../composables/useSchemaCatalog";
 import { useTableCatalog } from "../../composables/useTableCatalog";
 
@@ -340,45 +341,92 @@ const dbType = computed<DatabaseType>(() => {
 const tableCatalog = useTableCatalog();
 const schemaCatalog = useSchemaCatalog();
 
+/** How many tables one tab warms up front; a script naming 200 is not a menu. */
+const PREFETCH_LIMIT = 25;
+
 /**
- * Synchronous schema view for the completion source: the active tab's tables
- * from the session catalog, and columns read from the cache only.
+ * How much of a script the prefetch reads. Blanking a megabyte costs more than
+ * the round trips it saves, and the tables past this point still load on demand
+ * the moment they are typed.
+ */
+const PREFETCH_SCAN_LIMIT = 100_000;
+
+/**
+ * Tables one connection has discovered for a database, narrowed by `accept`.
  *
- * The table catalog is a Map, not a reactive array, so it is walked through a
- * visitor rather than copied per keystroke — and the async column fetch belongs
- * to the watcher below, so a keystroke never waits on the wire.
+ * The catalog is a Map of Maps, not a reactive array, so it is walked through
+ * a visitor rather than copied per keystroke.
+ */
+function walkCatalog(
+	connectionId: string,
+	database: string,
+	accept: (schema: string) => boolean,
+): string[] {
+	const tables: string[] = [];
+	const seen = new Set<string>();
+	if (!connectionId) return tables;
+	tableCatalog.eachDiscoveredTable(connectionId, (cached) => {
+		if (cached.database !== database) return;
+		if (!accept(cached.schema)) return;
+		for (const entry of cached.tables) {
+			const key = entry.name.toLowerCase();
+			if (seen.has(key)) continue;
+			seen.add(key);
+			tables.push(entry.name);
+		}
+	});
+	return tables;
+}
+
+/**
+ * The database a tab really runs on.
+ *
+ * A profile with no database of its own names none, and neither does a tab
+ * opened from the toolbar on it — the session then serves the server's default,
+ * which `connect` already reported. Reading it back here is what keeps the
+ * suggestions and the statement pointed at the same database.
+ */
+function effectiveDatabase(tab: Tab | null | undefined): string {
+	if (!tab?.connectionId) return "";
+	return (
+		tab.database ||
+		connectionsStore.databaseInfo[tab.connectionId]?.currentDatabase ||
+		""
+	);
+}
+
+/**
+ * The schema view the completion source reads: the active tab's tables from the
+ * session catalog, columns from the cache, and a promise for the columns that
+ * are missing. A keystroke never waits on the wire unless the answer is absent
+ * from the cache and the source decides the popup is worth waiting for.
  */
 function schemaContext(): SchemaCompletionContext {
 	const tab = activeTab.value;
 	const connectionId = tab?.connectionId ?? "";
-	const database = tab?.database ?? "";
+	const database = effectiveDatabase(tab);
 	const schema = tab?.schema ?? "";
-	const tables: string[] = [];
-	const seen = new Set<string>();
-	if (connectionId) {
-		tableCatalog.eachDiscoveredTable(connectionId, (cached) => {
-			if (cached.database !== database) return;
-			if (schema && cached.schema && cached.schema !== schema) return;
-			for (const entry of cached.tables) {
-				const key = entry.name.toLowerCase();
-				if (seen.has(key)) continue;
-				seen.add(key);
-				tables.push(entry.name);
-			}
-		});
-	}
+	const ready = connectionId !== "" && database !== "";
+	const keyFor = (table: string) => ({ connectionId, database, schema, table });
 	return {
-		tables,
+		tables: walkCatalog(
+			connectionId,
+			database,
+			(found) => !schema || !found || found === schema,
+		),
 		activeTable: tab?.table || undefined,
-		columnsFor: (table) => {
-			if (!connectionId || !database || !table) return [];
-			return schemaCatalog.cachedColumns({
+		cachedColumns: (table) =>
+			ready && table ? schemaCatalog.cachedColumns(keyFor(table)) : [],
+		loadColumns: (table) =>
+			ready && table
+				? schemaCatalog.columnsFor(keyFor(table))
+				: Promise.resolve([]),
+		tablesInSchema: (name) =>
+			walkCatalog(
 				connectionId,
 				database,
-				schema,
-				table,
-			});
-		},
+				(found) => found.toLowerCase() === name.toLowerCase(),
+			),
 	};
 }
 
@@ -395,23 +443,34 @@ watch(
 	{ immediate: true },
 );
 
-// The column fetch is here rather than in the source: completion has to stay
-// synchronous, and a result that arrives mid-typing is picked up by `version`.
+// Tables and columns for the tab are asked for as soon as it is shown, so the
+// first `SELECT |` or `FROM |` in a fresh tab has something to offer. The
+// trigger is the tab and its target, never the document: rescanning on each
+// keystroke would put the whole script through a regex per character.
 watch(
 	() => {
 		const tab = activeTab.value;
-		if (!tab?.connectionId || !tab.database || !tab.table) return "";
-		return `${tab.connectionId}|${tab.database}|${tab.schema}|${tab.table}`;
+		const database = effectiveDatabase(tab);
+		if (!tab?.connectionId || !database) return "";
+		return `${tab.id}|${tab.connectionId}|${database}|${tab.schema}`;
 	},
-	() => {
+	(key) => {
 		const tab = activeTab.value;
-		if (!tab?.connectionId || !tab.database || !tab.table) return;
-		void schemaCatalog.columnsFor({
-			connectionId: tab.connectionId,
-			database: tab.database,
-			schema: tab.schema,
-			table: tab.table,
-		});
+		const database = effectiveDatabase(tab);
+		if (!key || !tab?.connectionId || !database) return;
+		// The tab's own scope first: the whole-connection walk is for a search
+		// across databases, and waiting for it leaves `FROM` empty for seconds.
+		void tableCatalog.loadScope(tab.connectionId, database, tab.schema);
+		const names = referencedTablesIn(tab.sql.slice(0, PREFETCH_SCAN_LIMIT));
+		if (tab.table) names.push(tab.table);
+		for (const table of names.slice(0, PREFETCH_LIMIT)) {
+			void schemaCatalog.columnsFor({
+				connectionId: tab.connectionId,
+				database,
+				schema: tab.schema,
+				table,
+			});
+		}
 	},
 	{ immediate: true },
 );

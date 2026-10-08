@@ -26,6 +26,8 @@ export interface SchemaKey {
 interface CachedColumns {
 	columns: ColumnInfo[];
 	fetchedAt: number;
+	/** A failed list is cached too, but only for a moment. */
+	failed: boolean;
 }
 
 /**
@@ -34,6 +36,18 @@ interface CachedColumns {
  * should cost one RPC per table.
  */
 const SCHEMA_TTL_MS = 5 * 60_000;
+
+/**
+ * A failed list is cached like a good one, so a burst of typing cannot become a
+ * burst of RPCs. It expires far sooner: one dropped socket used to black out
+ * completions for five minutes, and the connection is usually back in seconds.
+ */
+const FAILURE_TTL_MS = 10_000;
+
+/** Whether a cached list is still worth answering with. */
+function isFresh(entry: CachedColumns): boolean {
+	return Date.now() - entry.fetchedAt < (entry.failed ? FAILURE_TTL_MS : SCHEMA_TTL_MS);
+}
 
 /** Cached columns, keyed by the four-part scope. */
 const columnsByTable = new Map<string, CachedColumns>();
@@ -66,6 +80,8 @@ export interface SchemaCatalog {
 	version: Ref<number>;
 	/** Drops every entry — tab closed, connection reset. */
 	invalidate(): void;
+	/** Drops one connection's entries after its socket dies. */
+	invalidateConnection(connectionId: string): void;
 }
 
 /**
@@ -85,7 +101,7 @@ export function useSchemaCatalog(): SchemaCatalog {
 	function columnsFor(key: SchemaKey): Promise<ColumnInfo[]> {
 		const cacheKey = keyOf(key);
 		const cached = columnsByTable.get(cacheKey);
-		if (cached && Date.now() - cached.fetchedAt < SCHEMA_TTL_MS) {
+		if (cached && isFresh(cached)) {
 			return Promise.resolve(cached.columns);
 		}
 		const pending = inFlight.get(cacheKey);
@@ -107,15 +123,17 @@ export function useSchemaCatalog(): SchemaCatalog {
 				columnsByTable.set(cacheKey, {
 					columns,
 					fetchedAt: Date.now(),
+					failed: false,
 				});
 				return columns;
 			})
 			.catch(() => {
 				// Cached like a success, with no columns: the popup simply has
-				// nothing to offer until the TTL runs out.
+				// nothing to offer until {@link FAILURE_TTL_MS} runs out.
 				columnsByTable.set(cacheKey, {
 					columns: [],
 					fetchedAt: Date.now(),
+					failed: true,
 				});
 				return [] as ColumnInfo[];
 			})
@@ -128,7 +146,8 @@ export function useSchemaCatalog(): SchemaCatalog {
 	}
 
 	function cachedColumns(key: SchemaKey): ColumnInfo[] {
-		return columnsByTable.get(keyOf(key))?.columns ?? [];
+		const entry = columnsByTable.get(keyOf(key));
+		return entry && isFresh(entry) ? entry.columns : [];
 	}
 
 	function invalidate(): void {
@@ -137,5 +156,27 @@ export function useSchemaCatalog(): SchemaCatalog {
 		cacheVersion.value += 1;
 	}
 
-	return { columnsFor, cachedColumns, version: cacheVersion, invalidate };
+	/**
+	 * Drops one connection's lists, leaving every other connection's alone.
+	 *
+	 * Keys are length-prefixed, so the connection's own prefix can never be the
+	 * prefix of another id. The in-flight map is left running: a fetch started
+	 * before the socket died answers with columns the schema still has.
+	 */
+	function invalidateConnection(connectionId: string): void {
+		if (!connectionId) return;
+		const prefix = `${connectionId.length}:${connectionId}`;
+		for (const cacheKey of [...columnsByTable.keys()]) {
+			if (cacheKey.startsWith(prefix)) columnsByTable.delete(cacheKey);
+		}
+		cacheVersion.value += 1;
+	}
+
+	return {
+		columnsFor,
+		cachedColumns,
+		version: cacheVersion,
+		invalidate,
+		invalidateConnection,
+	};
 }

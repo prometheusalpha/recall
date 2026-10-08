@@ -206,6 +206,11 @@ export interface TableCatalog {
 	version: Ref<number>;
 	loadTables(connectionId: string): Promise<void>;
 	/**
+	 * Lists one (database, schema) on demand, for a caller that knows which pair
+	 * it is looking at — the editor, whose tab names one.
+	 */
+	loadScope(connectionId: string, database: string, schema: string): Promise<void>;
+	/**
 	 * Walks one connection's discovered (database, schema) pairs. A visitor
 	 * rather than a returned array: the row builder runs inside a computed, so a
 	 * copy per connection per keystroke would be pure garbage.
@@ -408,6 +413,51 @@ export function useTableCatalog(): TableCatalog {
 	}
 
 	/**
+	 * Lists one (database, schema) the caller is looking at right now, without
+	 * walking the rest of the connection.
+	 *
+	 * The whole-connection walk exists for a search that spans databases. An
+	 * editor knows the exact pair it is on, and waiting for the walk leaves
+	 * `FROM` empty for as long as the fan-out takes — which is forever when the
+	 * tab runs on a database the walk never chased. Never rejects: a scope that
+	 * will not list is one missing hint, not a reason to fail the editor.
+	 */
+	async function loadScope(
+		connectionId: string,
+		database: string,
+		schema: string,
+	): Promise<void> {
+		if (!connectionId || !database) return;
+		const config = connections.configs.find((entry) => entry.id === connectionId);
+		if (!config) return;
+		const known = catalogs.get(connectionId);
+		const fresh =
+			known !== undefined && Date.now() - known.fetchedAt < CATALOG_TTL_MS;
+		// A fresh record belongs to a walk that may still be filling it, and a
+		// scope it already answered is left alone. A stale one is replaced
+		// outright, exactly as the walk replaces it.
+		const catalog: DiscoveredCatalog =
+			known && fresh
+				? known
+				: {
+						fetchedAt: Date.now(),
+						complete: false,
+						databases: [],
+						schemas: new Map<string, string[]>(),
+						tables: new Map<string, CachedTables>(),
+					};
+		if (catalog !== known) catalogs.set(connectionId, catalog);
+		if (catalog.tables.has(scopeKey(database, schema))) return;
+		try {
+			// The backend answers only for a session `connect()` opened.
+			await connections.ensureConnected(connectionId);
+			await cacheScope(catalog, connectionId, database, schema);
+		} catch {
+			// Cached as a miss by nothing at all: the next tab retries it.
+		}
+	}
+
+	/**
 	 * Names a fan-out round that came back with *nothing* to show, and only then.
 	 *
 	 * The gate is the whole design. A fan-out touches every configured profile,
@@ -459,6 +509,7 @@ export function useTableCatalog(): TableCatalog {
 	return {
 		version: cacheVersion,
 		loadTables,
+		loadScope,
 		eachDiscoveredTable,
 		reportFanOut,
 		invalidate,
