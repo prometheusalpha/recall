@@ -162,7 +162,7 @@ function commit(): void {
 			     boxes. No `overflow-hidden`: it would clip the suggestion
 			     popup, which is anchored inside a segment. -->
 			<div
-				class="flex min-w-0 max-w-[72rem] flex-1 items-stretch self-stretch border-x bg-background"
+				class="flex min-w-0 flex-1 items-stretch self-stretch border-x bg-background"
 			>
 				<ClauseSuggestInput
 					ref="whereInput"
@@ -173,6 +173,7 @@ function commit(): void {
 					placeholder="name = 'Alice'"
 					:columns="columns"
 					:column-types="columnTypes"
+					:style="{ flexGrow: 1.4 }"
 					@submit="commit"
 				/>
 
@@ -189,8 +190,6 @@ function commit(): void {
 				/>
 			</div>
 		</template>
-
-		<div class="flex-1" />
 
 		<!-- Column visibility lives with the other actions rather than in its own
 		     row: it is per-result state, and a second band above the grid is
