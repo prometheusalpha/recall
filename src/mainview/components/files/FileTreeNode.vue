@@ -90,8 +90,22 @@ function cancelRename(): void {
 
 /** `.sql` files get the code glyph; anything else the plain document glyph. */
 function iconFor(node: SqlFileNode): Component {
-	return node.name.toLowerCase().endsWith(".sql") ? FileCode2 : FileText;
+	return isSql(node.name) ? FileCode2 : FileText;
 }
+
+/** One predicate for the glyph and the tint, so the two can never disagree. */
+function isSql(name: string): boolean {
+	return name.toLowerCase().endsWith(".sql");
+}
+
+/**
+ * Icon tint. Folders and SQL files carry the same amber/blue the connection
+ * tree uses for its nodes, so the two panels read as one surface; any other
+ * file keeps the muted grey it had before there was a palette at all.
+ */
+const iconClass = computed(() =>
+	props.node.isDir ? "text-amber-500" : isSql(props.node.name) ? "text-blue-500" : "text-muted-foreground",
+);
 
 /** A collapsed directory shows the closed glyph, matching the twisty state. */
 function directoryIconFor(expanded: boolean): Component {
@@ -125,7 +139,8 @@ function directoryIconFor(expanded: boolean): Component {
 
 			<component
 				:is="node.isDir ? directoryIconFor(expanded) : iconFor(node)"
-				class="size-3 shrink-0 text-muted-foreground"
+				class="size-3 shrink-0"
+				:class="iconClass"
 				aria-hidden="true"
 			/>
 
