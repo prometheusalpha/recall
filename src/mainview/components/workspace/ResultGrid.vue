@@ -1631,6 +1631,10 @@ function onDocumentPointerDown(event: PointerEvent): void {
  * no scroll event carried it.
  */
 watch(selection.focus, () => {
+	// `onBodyScroll` skips the offsets while nothing is open, so a focus that
+	// opens the box has to read them itself.
+	const body = scrollerNode();
+	if (body) bodyScroll.value = { top: body.scrollTop, left: body.scrollLeft };
 	if (peekDismissed.value) measureBodyBox();
 	peekDismissed.value = false;
 });
@@ -1638,11 +1642,17 @@ watch(selection.focus, () => {
 /**
  * The body's scroll event. The box is placed by coordinates, so it has to be
  * told where the content moved to, or it would sit over the wrong row.
+ *
+ * The offsets are written only while a box is open. Writing them on every
+ * scroll frame re-rendered the whole grid even with nothing open, which is
+ * exactly when the rows need the main thread free to stay painted; the focus
+ * watcher re-reads them when a box opens.
  */
 function onBodyScroll(): void {
+	syncHeaderScroll();
+	if (peekCell.value === null) return;
 	const body = scrollerNode();
 	if (body) bodyScroll.value = { top: body.scrollTop, left: body.scrollLeft };
-	syncHeaderScroll();
 }
 
 /** The statement collapsed to one line, which is all the status bar can show. */
