@@ -29,6 +29,7 @@ import { useTabsStore } from "./stores/tabs";
 import { useConnectionsStore } from "./stores/connections";
 import { useBookmarksStore } from "./stores/bookmarks";
 import { useTabClose } from "./composables/useTabClose";
+import { focusResultFilter } from "./composables/useResultFilterFocus";
 import { registerCommand, runCommand, useShortcuts } from "./composables/useShortcuts";
 import { useSqlFilesStore } from "./stores/sqlFiles";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -177,6 +178,11 @@ function registerShortcutCommands(): void {
 	registerCommand("quickOpen.toggle", () => {
 		quickOpen.open.value = !quickOpen.open.value;
 	});
+	// The WHERE box lives inside a grid this shell cannot reach, so the command
+	// asks the one grid on screen to move focus. It answers `false` when the
+	// result has no filter bar (a query tab), and `runCommand` then leaves the
+	// chord to the webview rather than claiming a key nothing acted on.
+	registerCommand("result.focusWhere", () => focusResultFilter());
 }
 
 // Mnemonic jump for the whole window, following the window dispatcher above: a

@@ -40,7 +40,8 @@ export type CommandId =
 	| "editor.formatSql"
 	| "result.sortAsc"
 	| "result.sortDesc"
-	| "result.rerun";
+	| "result.rerun"
+	| "result.focusWhere";
 
 export interface CommandDefinition {
 	id: CommandId;
@@ -164,6 +165,19 @@ export const SHORTCUT_COMMANDS: CommandDefinition[] = [
 		group: "Result grid",
 		defaultBinding: accel("r"),
 	},
+	/*
+	 * Dispatched by the window shell, unlike the grid-owned chords above: the
+	 * WHERE box it focuses is fed by the grid, but the chord has to work from
+	 * anywhere, not only while a cell holds focus. The shell reaches the box
+	 * through `focusResultFilter`, which reports whether a filter bar was on
+	 * screen; a query tab has none, so the chord is left to the webview there.
+	 */
+	{
+		id: "result.focusWhere",
+		label: "Focus WHERE filter",
+		group: "Result grid",
+		defaultBinding: accel("l"),
+	},
 ];
 
 /** Static id → command lookup, built from the table so an entry cannot be missing. */
@@ -238,10 +252,10 @@ const bindings = ref<BindingMap>(readPersisted());
 const suspend = ref(false);
 
 /** The command implementations, registered by App.vue at mount. */
-const registry = new Map<CommandId, () => void>();
+const registry = new Map<CommandId, () => void | boolean>();
 
 /** Overwrites by design: a re-mounting App must not dispatch into a stale handler. */
-export function registerCommand(id: CommandId, run: () => void): void {
+export function registerCommand(id: CommandId, run: () => void | boolean): void {
 	registry.set(id, run);
 }
 
@@ -254,12 +268,15 @@ export function registerCommand(id: CommandId, run: () => void): void {
  * Grid-scoped commands rely on this — they live in the table so they are
  * rebindable and printable, but their implementation sits in the grid, which
  * claims the chord itself when it holds focus and lets it through otherwise.
+ *
+ * An implementation may also answer `false` when it is present but has nothing
+ * to act on this time (the filter bar's focus chord on a result with no WHERE
+ * box): the chord still falls through rather than being swallowed on a dead end.
  */
 export function runCommand(id: CommandId): boolean {
 	const run = registry.get(id);
 	if (!run) return false;
-	run();
-	return true;
+	return run() !== false;
 }
 
 const ARROWS: Record<string, string> = {

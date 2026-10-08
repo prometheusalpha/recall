@@ -55,6 +55,33 @@ const emit = defineEmits<{
 	"update:visibleColumns": [columns: string[]];
 }>();
 
+/** The shape `ClauseSuggestInput` exposes via `defineExpose`. */
+interface ClauseInputHandle {
+	focus: () => void;
+}
+
+/**
+ * The WHERE segment, held so the window shell's Cmd/Ctrl+L can move focus into
+ * it. Typed as `object` like `AppSidebar`'s tree handle, so this file compiles
+ * whether or not the SFC's own types are visible, and recovered by the cast in
+ * `focusWhere`.
+ */
+const whereInput = ref<object | null>(null);
+
+/**
+ * Published to the grid, which forwards it to the shell. `false` means this
+ * band has no WHERE box (a query tab, where `sortable` is false), so the shell
+ * can leave the chord to the webview instead of swallowing it on a dead end.
+ */
+function focusWhere(): boolean {
+	const field = whereInput.value as ClauseInputHandle | null;
+	if (field === null) return false;
+	field.focus();
+	return true;
+}
+
+defineExpose({ focusWhere });
+
 const hiddenCount = computed(
 	() => props.columns.length - props.visibleColumns.length,
 );
@@ -135,9 +162,10 @@ function commit(): void {
 			     boxes. No `overflow-hidden`: it would clip the suggestion
 			     popup, which is anchored inside a segment. -->
 			<div
-				class="flex min-w-0 max-w-[36rem] flex-1 items-stretch self-stretch border-x bg-background"
+				class="flex min-w-0 max-w-[72rem] flex-1 items-stretch self-stretch border-x bg-background"
 			>
 				<ClauseSuggestInput
+					ref="whereInput"
 					v-model="whereDraft"
 					label="WHERE"
 					:icon="Filter"

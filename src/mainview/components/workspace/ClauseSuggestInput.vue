@@ -148,6 +148,17 @@ function onInput(event: Event): void {
 	if (target instanceof HTMLInputElement) emit("update:modelValue", target.value);
 }
 
+/**
+ * Moves the caret into the field. The window shell owns the Cmd/Ctrl+L chord
+ * but cannot reach an input nested inside a result, so it asks the grid, which
+ * asks this field — the one thing the shell cannot do for itself.
+ */
+function focusInput(): void {
+	input.value?.focus();
+}
+
+defineExpose({ focus: focusInput });
+
 function move(step: number): void {
 	const total = suggestions.value.length;
 	if (total === 0) return;

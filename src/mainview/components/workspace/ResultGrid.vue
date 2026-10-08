@@ -44,6 +44,7 @@ import {
 	type GridNavigationDirection,
 } from "../../composables/useGridSelection";
 import { useShortcuts } from "../../composables/useShortcuts";
+import { registerResultFilterFocus } from "../../composables/useResultFilterFocus";
 import { Button } from "../ui/button";
 import {
 	DropdownMenuCheckboxItem,
@@ -300,6 +301,22 @@ const pageRows = ref(20);
  */
 const headerScrollEl = ref<HTMLElement | null>(null);
 
+/** The shape `ResultFilterBar` exposes via `defineExpose`. */
+interface ResultFilterBarHandle {
+	focusWhere: () => boolean;
+}
+
+/**
+ * The filter band, held so the window shell's Cmd/Ctrl+L can move focus into
+ * its WHERE box. Typed as `object` like `AppSidebar`'s tree handle, so this
+ * file compiles whether or not the SFC's own types are visible, and recovered
+ * by the cast in the callback published below.
+ */
+const filterBarEl = ref<object | null>(null);
+
+/** Set while this grid is mounted; clears the shell's handle on the way out. */
+let releaseFilterFocus: (() => void) | null = null;
+
 /**
  * The element that actually scrolls.
  *
@@ -508,6 +525,13 @@ function measureCellFont(): void {
 onMounted(() => {
 	void nextTick(measureCellFont);
 	void nextTick(measureBodyBox);
+	// The shell owns Cmd/Ctrl+L but cannot reach the WHERE box, so this grid
+	// publishes a way in — and answers `false` when the filter bar has no box
+	// on screen (a query tab), so the shell leaves the chord to the webview.
+	releaseFilterFocus = registerResultFilterFocus(() => {
+		const bar = filterBarEl.value as ResultFilterBarHandle | null;
+		return bar?.focusWhere() ?? false;
+	});
 	// The box closes on a press outside the grid, which no other listener here
 	// sees: the pointer lands in another pane entirely.
 	document.addEventListener("pointerdown", onDocumentPointerDown);
@@ -1235,6 +1259,8 @@ onBeforeUnmount(() => {
 	stopCellDrag();
 	stopColumnResize();
 	stopColumnDrag();
+	releaseFilterFocus?.();
+	releaseFilterFocus = null;
 	document.removeEventListener("pointerdown", onDocumentPointerDown);
 	scrollerResizeObserver?.disconnect();
 	scrollerResizeObserver = null;
@@ -1685,6 +1711,7 @@ function rowKey(_row: unknown, index: number): number {
 
 		<template v-else>
 			<ResultFilterBar
+				ref="filterBarEl"
 				:where="where"
 				:order-by="orderBy"
 				:sortable="filterable"

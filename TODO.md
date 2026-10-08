@@ -88,6 +88,7 @@ Phase 15:
 - Highlight màu text cột theo kiểu dữ liệu
 - Auto limit trong sql editor 
 - Suggest field trong editor
+- Nới đôi thanh WHERE / ORDER BY, thêm Cmd+L để focus vào input WHERE
 
 Sau:
 - Màn loading 
