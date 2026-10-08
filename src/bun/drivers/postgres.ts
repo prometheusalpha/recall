@@ -138,9 +138,15 @@ export const postgresDriver: Driver = {
 		cfg: ConnectionConfig,
 		_database: string,
 	): Promise<string[]> {
+		// Temp namespaces (`pg_temp_N`, `pg_toast_temp_N`) are per-session scratch
+		// that vanish with the connection, so they are hidden even when system
+		// schemas are shown — nothing under them is browsable.
 		const rows = (await db.unsafe(
 			cfg.showSystemSchemas
-				? "SELECT schema_name FROM information_schema.schemata ORDER BY 1"
+				? "SELECT schema_name FROM information_schema.schemata " +
+					"WHERE schema_name NOT LIKE 'pg_temp_%' " +
+					"AND schema_name NOT LIKE 'pg_toast_temp_%' " +
+					"ORDER BY 1"
 				: "SELECT schema_name FROM information_schema.schemata " +
 					"WHERE schema_name NOT LIKE 'pg_%' " +
 					"AND schema_name <> 'information_schema' " +
