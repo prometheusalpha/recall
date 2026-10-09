@@ -34,7 +34,7 @@ const MIN_EDITOR_SIZE = 15;
 /** Page sizes offered in the grid's pager, smallest first. */
 const PAGE_SIZE_OPTIONS = [100, 500, 1000, 2000] as const;
 /** Rows a table tab asks for when it opens. 1000 is what the panel has always fetched in one go, so a table that fits does not suddenly become paged. */
-const DEFAULT_PAGE_SIZE = 1000;
+const DEFAULT_PAGE_SIZE = 100;
 
 /**
  * A page size only means something the pager can render, so anything outside

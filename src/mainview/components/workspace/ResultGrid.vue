@@ -131,7 +131,7 @@ const props = withDefaults(
 		orderBy: "",
 		filterable: false,
 		hiddenColumns: () => new Set<string>(),
-		pageSize: 1000,
+		pageSize: 100,
 		pageSizeOptions: () => [100, 500, 1000, 5000],
 		hasNextPage: false,
 	},
