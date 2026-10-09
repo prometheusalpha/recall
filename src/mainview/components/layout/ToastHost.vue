@@ -74,21 +74,23 @@ watch(expanded, (isExpanded) => {
 				v-if="visible"
 				class="flex items-start gap-2 rounded-md border border-border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg"
 			>
-				<span
-					ref="messageEl"
-					class="min-w-0 flex-1 break-words"
-					:class="expanded ? 'max-h-[60vh] overflow-y-auto whitespace-pre-wrap' : 'line-clamp-2 whitespace-pre-wrap'"
-				>
-					{{ message }}
-				</span>
-				<button
-					v-if="action"
-					type="button"
-					class="shrink-0 rounded-md bg-primary px-2 py-0.5 font-medium text-primary-foreground transition-colors hover:bg-primary/80 focus-visible:ring-primary/50 focus-visible:ring-2 focus-visible:outline-none"
-					@click="runAction"
-				>
-					{{ action.label }}
-				</button>
+				<div class="flex min-w-0 flex-1 flex-col gap-1.5">
+					<span
+						ref="messageEl"
+						class="break-words"
+						:class="expanded ? 'max-h-[60vh] overflow-y-auto whitespace-pre-wrap' : 'line-clamp-2 whitespace-pre-wrap'"
+					>
+						{{ message }}
+					</span>
+					<button
+						v-if="action"
+						type="button"
+						class="self-start rounded-md bg-primary px-2 py-0.5 font-medium text-primary-foreground transition-colors hover:bg-primary/80 focus-visible:ring-primary/50 focus-visible:ring-2 focus-visible:outline-none"
+						@click="runAction"
+					>
+						{{ action.label }}
+					</button>
+				</div>
 				<!--
 					Only rendered when the clamp actually hides text: a one-line toast
 					growing a chevron would be a control that does nothing.
