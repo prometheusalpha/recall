@@ -118,7 +118,8 @@ export const useBookmarksStore = defineStore("bookmarks", () => {
 					toast("Add a connection first");
 					return;
 				}
-				await connections.ensureConnected(resolution.datasource.connectionId);
+				// No eager connect: the file is read locally and the connection is
+				// asserted by the query path when the tab is run.
 				text = (await sqlFiles.read(stored.path)).content;
 				tab = tabs.openQueryTab({
 					connectionId: resolution.datasource.connectionId,

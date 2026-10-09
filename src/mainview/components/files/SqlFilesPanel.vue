@@ -239,8 +239,9 @@ async function onActivate(node: SqlFileNode): Promise<void> {
 		return;
 	}
 
+	// Opening a file is a local read: no socket is dialled here, the connection
+	// is asserted lazily by the query path when the tab is actually run.
 	try {
-		await connections.ensureConnected(datasource.connectionId);
 		const { content } = await sqlFiles.read(node.path);
 		const tab = tabs.openQueryTab({
 			connectionId: datasource.connectionId,

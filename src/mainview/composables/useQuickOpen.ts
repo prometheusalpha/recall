@@ -211,7 +211,8 @@ export function useQuickOpen(): QuickOpenPalette {
 				tabs.activate(tab.id);
 				await connections.ensureConnected(item.connectionId);
 			} else if (item.kind === "file") {
-				await connections.ensureConnected(item.connectionId);
+				// No eager connect: the file is read locally and the connection is
+				// asserted by the query path when the tab is run.
 				const { content } = await sqlFiles.read(item.path);
 				const tab = tabs.openQueryTab({
 					connectionId: item.connectionId,
