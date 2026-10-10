@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
+import type { AcceptableValue } from "reka-ui";
 import { Minus, Plus } from "lucide-vue-next";
 import ConnectionDialog from "./components/dialogs/ConnectionDialog.vue";
 import AppSidebar from "./components/sidebar/AppSidebar.vue";
@@ -14,6 +15,13 @@ import TabCloseDialog from "./components/workspace/TabCloseDialog.vue";
 import { useQuickOpen } from "./composables/useQuickOpen";
 import { Button } from "./components/ui/button";
 import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "./components/ui/select";
+import {
 	Dialog,
 	DialogContent,
 	DialogDescription,
@@ -21,7 +29,9 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "./components/ui/dialog";
+import { useGridFont } from "./composables/useGridFont";
 import { useTheme } from "./composables/useTheme";
+import { useUiFont } from "./composables/useUiFont";
 import { useUiScale } from "./composables/useUiScale";
 import { useToast } from "./composables/useToast";
 import { errorMessage, rpc } from "./lib/rpc";
@@ -73,6 +83,19 @@ const {
 	apply: applyUiSize,
 	step: stepUiSize,
 } = useUiScale();
+
+const { font: uiFont, set: setUiFont } = useUiFont();
+
+/** Reka's select hands back any acceptable value; only the two faces matter. */
+function onUiFont(value: AcceptableValue) {
+	setUiFont(value === "dbx" ? "dbx" : "system");
+}
+
+const { font: gridFont, set: setGridFont } = useGridFont();
+
+function onGridFont(value: AcceptableValue) {
+	setGridFont(value === "dbx" ? "dbx" : "default");
+}
 
 const { toast } = useToast();
 
@@ -359,6 +382,34 @@ onBeforeUnmount(() => {
 							<Plus aria-hidden="true" />
 						</Button>
 					</div>
+				</div>
+				<!-- Only the shell changes face; the grid and editor stay on the
+				     mono token. `System` is what the app ships with. -->
+				<div class="flex items-center justify-between border-t border-border pt-3">
+					<span class="text-sm">UI font</span>
+					<Select :model-value="uiFont" @update:model-value="onUiFont">
+						<SelectTrigger class="w-[160px]">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="system">System</SelectItem>
+							<SelectItem value="dbx">DBX default</SelectItem>
+						</SelectContent>
+					</Select>
+				</div>
+				<!-- The grid keeps its own face, mono by default; the DBX face is
+				     proportional, so auto-sized columns stop lining up. -->
+				<div class="flex items-center justify-between border-t border-border pt-3">
+					<span class="text-sm">Grid font</span>
+					<Select :model-value="gridFont" @update:model-value="onGridFont">
+						<SelectTrigger class="w-[160px]">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="default">Default</SelectItem>
+							<SelectItem value="dbx">DBX default</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 				<!-- The footer is a row by default; two labels of this width
 				     overflow it on a narrow dialog, so it wraps instead of

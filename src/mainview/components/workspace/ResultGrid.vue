@@ -43,6 +43,7 @@ import {
 	useGridSelection,
 	type GridNavigationDirection,
 } from "../../composables/useGridSelection";
+import { useGridFont } from "../../composables/useGridFont";
 import { useShortcuts } from "../../composables/useShortcuts";
 import { registerResultFilterFocus } from "../../composables/useResultFilterFocus";
 import { Button } from "../ui/button";
@@ -577,6 +578,16 @@ onMounted(() => {
  * longer exists.
  */
 watch(rows, () => {
+	void nextTick(measureCellFont);
+});
+
+/**
+ * A change of grid face changes the advance width `charWidth` was measured
+ * against, and every auto-fitted column is sized from it — re-read the font so
+ * the columns are re-fitted rather than left at the old face's width.
+ */
+const { font: gridFont } = useGridFont();
+watch(gridFont, () => {
 	void nextTick(measureCellFont);
 });
 

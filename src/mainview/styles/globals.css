@@ -1,6 +1,4 @@
 
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap');
-
 @import "./tokens.css";
 @import "tw-animate-css";
 
@@ -26,7 +24,6 @@
 		font-synthesis: none;
 		text-rendering: geometricPrecision;
 		overflow: hidden;
-		-webkit-font-smoothing: antialiased;
 	}
 
 	::selection {
@@ -375,8 +372,8 @@ body.panel-resizing * {
  * monospaced cells make a truncated value's width predictable.
  */
 .data-grid-font {
-	font-family: var(--font-mono);
-	font-feature-settings: "tnum", var(--font-mono-features);
+	font-family: var(--font-grid);
+	font-feature-settings: "tnum", var(--font-grid-features);
 	font-variant-numeric: tabular-nums;
 	font-size: 12px;
 }
@@ -388,8 +385,8 @@ body.panel-resizing * {
    these two selectors into the handle's rule and collapsed the grid. */
 .grid-header-cell,
 .grid-cell {
-	font-family: var(--font-mono);
-	font-feature-settings: var(--font-mono-features);
+	font-family: var(--font-grid);
+	font-feature-settings: var(--font-grid-features);
 	font-variant-numeric: tabular-nums;
 }
 
@@ -404,8 +401,8 @@ body.panel-resizing * {
 	color: var(--muted-foreground);
 	background: var(--chrome);
 	justify-content: flex-end;
-	font-family: var(--font-mono);
-	font-feature-settings: "tnum", var(--font-mono-features);
+	font-family: var(--font-grid);
+	font-feature-settings: "tnum", var(--font-grid-features);
 	font-variant-numeric: tabular-nums;
 	flex-shrink: 0;
 	/* The gutter is reference, not content, so it sits a step below the values. */
@@ -757,6 +754,20 @@ body.panel-resizing * {
 
 .tree-row[data-loading="true"] {
 	opacity: 0.5;
+}
+
+/* DBX tunes the Geist variable axis rather than snapping to 400/500: the
+ * connection label sits at 480 and everything under it at 430. Only a variable
+ * face answers — the system UI font ignores the axis and falls back to the
+ * `font-weight` below. */
+.tree-label-connection {
+	font-weight: 400;
+	font-variation-settings: "wght" 480;
+}
+
+.tree-label-object {
+	font-weight: 400;
+	font-variation-settings: "wght" 430;
 }
 
 .tree-twisty {

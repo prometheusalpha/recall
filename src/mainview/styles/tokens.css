@@ -115,6 +115,32 @@
 	--gutter: rgb(243 243 243);
 	--sidebar-header: rgb(250 250 250);
 	--window-top-border: rgb(0 0 0 / 0.35);
+
+	/* Grid faces: header, body cells and the row gutter. Defaults to the mono
+	   token, which is what the width arithmetic assumes; Settings can swap in
+	   the sans face below. */
+	--font-grid: var(--font-mono);
+	--font-grid-features: var(--font-mono-features);
+}
+
+/* The Settings "UI font" choice. `system` is the token above and needs no
+   rule; `dbx` swaps in the stack the reference app ships, so both apps read
+   the same. Only `--font-sans` moves — the grid and editor stay on mono. */
+:root[data-ui-font="dbx"] {
+	--font-sans:
+		"Geist Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+		"Segoe UI", system-ui, sans-serif;
+}
+
+/* The Settings "Grid font" choice. Same shape as the UI font: the default is
+   the token above. The DBX face is proportional, so columns no longer align
+   by advance width — that is the trade the option makes. */
+:root[data-grid-font="dbx"] {
+	--font-grid:
+		"Geist Variable Tabular", "Geist Variable", "PingFang SC",
+		"Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+	/* Geist carries none of the mono face's stylistic sets, only its figures. */
+	--font-grid-features: "tnum" 1, "lnum" 1;
 }
 
 .dark {

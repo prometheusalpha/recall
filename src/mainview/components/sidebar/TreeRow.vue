@@ -36,6 +36,8 @@ const props = withDefaults(
 		loading?: boolean;
 		/** Tailwind class for the node glyph, set by the tree from its kind. */
 		iconClass?: string;
+		/** Weight class for the label, set by the tree from its kind. */
+		labelClass?: string;
 		/** Rendered as bare muted text beside the label, DBX-style. */
 		childCount?: number;
 		/** Green dot marking a connection whose socket is live. */
@@ -144,13 +146,13 @@ function onContextMenu(event: MouseEvent): void {
 		     fixed 28px height are untouched. -->
 		<Tooltip v-if="tooltipText">
 			<TooltipTrigger as-child>
-				<span class="min-w-0 flex-1 truncate">{{ label }}</span>
+				<span class="min-w-0 flex-1 truncate" :class="labelClass">{{ label }}</span>
 			</TooltipTrigger>
 			<!-- The primitive's own `max-w-xs` wraps a long identifier into four
 			     short lines; the row has the sidebar's full width to spend. -->
 			<TooltipContent class="max-w-lg">{{ tooltipText }}</TooltipContent>
 		</Tooltip>
-		<span v-else class="min-w-0 flex-1 truncate">{{ label }}</span>
+		<span v-else class="min-w-0 flex-1 truncate" :class="labelClass">{{ label }}</span>
 
 		<span
 			v-if="childCount"

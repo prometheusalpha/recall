@@ -60,7 +60,8 @@ State lives in **three** places, deliberately:
 - **OS keychain** — passwords only (`src/bun/credentialStore.ts`).
 - **localStorage** — `recall.tabs`, `recall.snippets`, `recall.sqlFileFolders`,
   `recall.sqlFileFilter`, `recall.sqlFileBindings`, `recall.theme`,
-  `recall.uiScale`, `recall.resultPaneSize`, `recall.panel.sidebar`,
+  `recall.uiFont`, `recall.gridFont`, `recall.uiScale`,
+  `recall.resultPaneSize`, `recall.panel.sidebar`,
   `recall.panel.files`, `recall.connections` (legacy, read-once-then-delete).
 
 ## Development Commands

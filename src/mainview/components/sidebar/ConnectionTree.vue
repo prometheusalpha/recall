@@ -144,6 +144,8 @@ interface TreeRowBinding {
 	selected: boolean;
 	loading: boolean;
 	iconClass: string;
+	/** Weight class for the label, chosen from the node kind. */
+	labelClass: string;
 	childCount?: number;
 	connected: boolean;
 	connectedTitle?: string;
@@ -1015,6 +1017,10 @@ function rowBinding(
 					: node.label,
 		depth: item.depth,
 		...rowGlyph(node),
+		// DBX weights the connection row above its objects (480 vs 430 on the
+		// Geist axis); every other kind is an object here.
+		labelClass:
+			node.kind === "connection" ? "tree-label-connection" : "tree-label-object",
 		// Everything but a leaf expands; a group row opens its list and nothing
 		// else, and the twisty is what invites that click.
 		hasChildren: node.kind !== "leaf",

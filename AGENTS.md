@@ -5,6 +5,7 @@
 - Ưu tiên subagent cho các task dài / độc lập
 - Cố gắng giữ do các file không vượt quá 1000 dòng, nếu vốn đã vượt quá 1000 dòng thì cố gắng không để nó thêm quá dài
 - Comment nên ngắn gọn, không dài hơn 5-10 dòng
+- Ưu tiên lưu local sqlite hơn là local storage
 
 # Tech
 - Đây là repo electronbun + TS + Vue
