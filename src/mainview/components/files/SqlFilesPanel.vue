@@ -22,17 +22,8 @@ import { useSqlFilesStore } from "../../stores/sqlFiles";
 import { useTabsStore } from "../../stores/tabs";
 import { usePanelResize } from "../../composables/usePanelResize";
 import { Button } from "../ui/button";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuLabel,
-	DropdownMenuSeparator,
-	DropdownMenuSub,
-	DropdownMenuSubContent,
-	DropdownMenuSubTrigger,
-	DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
+import CustomContextMenu from "../ui/CustomContextMenu.vue";
+import type { ContextMenuItem } from "../ui/CustomContextMenu.vue";
 import { Input } from "../ui/input";
 import {
 	Dialog,
@@ -88,14 +79,12 @@ const activePath = computed(() => tabs.activeTab?.path ?? null);
 
 /** The node the context menu was opened on, null while the menu is closed. */
 const menuNode = ref<SqlFileNode | null>(null);
-const menuOpen = ref(false);
 /**
- * Virtual anchor for the context menu. `DropdownMenu` positions its content
- * against the trigger element, so a zero-size element parked at the pointer is
- * what puts the menu under the cursor rather than under the whole panel. The
- * menu is opened by the right-click handler, never by clicking this.
+ * Items handed to the one shared `CustomContextMenu` host. Rebuilt on every
+ * open so the entries match the row under the pointer, and so a clipboard-
+ * dependent entry reads the clipboard at the moment the menu is raised.
  */
-const menuAnchor = ref({ x: 0, y: 0 });
+const menuItems = ref<ContextMenuItem[]>([]);
 
 /**
  * The directory the toolbar's create buttons act on: the one holding the row
@@ -190,11 +179,70 @@ function applyFilter(): void {
 	for (const folder of sqlFiles.folders) void sqlFiles.refresh(folder);
 }
 
-function onMenu(node: SqlFileNode, event: MouseEvent): void {
+function onMenu(
+	node: SqlFileNode,
+	event: MouseEvent,
+	openMenu: (event: MouseEvent, items?: ContextMenuItem[]) => void,
+): void {
 	rememberContext(node);
 	menuNode.value = node;
-	menuAnchor.value = { x: event.clientX, y: event.clientY };
-	menuOpen.value = true;
+	menuItems.value = fileMenuItems(node);
+	// The just-built array rides the open call as an override so the open and
+	// the prop update share one event turn.
+	openMenu(event, menuItems.value);
+}
+
+/**
+ * The actions a tree row offers, keyed off whether it is a directory. A
+ * directory cannot be opened, revealed or bound to a datasource, so its menu
+ * is about the directory itself rather than about running a file.
+ */
+function fileMenuItems(node: SqlFileNode): ContextMenuItem[] {
+	if (node.isDir) {
+		return [
+			{ label: "New file here…", icon: FilePlus2, action: () => createInMenu(false) },
+			{ label: "New folder here…", icon: FolderPlus, action: () => createInMenu(true) },
+			{ label: "", separator: true },
+			{ label: "Cut", icon: Scissors, action: cutFromMenu },
+			{ label: "Copy", icon: Copy, action: copyFromMenu },
+			{
+				label: "Paste",
+				icon: ClipboardPaste,
+				disabled: sqlFiles.clipboard === null,
+				action: pasteFromMenu,
+			},
+			{ label: "", separator: true },
+			{ label: "Rename…", icon: Pencil, action: startRename },
+			{ label: "", separator: true },
+			{
+				label: "Delete",
+				icon: Trash2,
+				variant: "destructive",
+				action: askDelete,
+			},
+		];
+	}
+	return [
+		{ label: "Open", action: openFromMenu },
+		{ label: "Rename…", icon: Pencil, action: startRename },
+		{ label: "Duplicate", icon: CopyPlus, action: duplicateFromMenu },
+		{ label: "Cut", icon: Scissors, action: cutFromMenu },
+		{ label: "Copy", icon: Copy, action: copyFromMenu },
+		{ label: "", separator: true },
+		{ label: "Reveal in Finder", icon: FolderSearch, action: reveal },
+		{ label: "Copy Path", icon: Copy, action: copyPath },
+		{ label: "", separator: true },
+		{
+			label: "Datasource",
+			disabled: datasourceChoices.value.length === 0,
+			children: datasourceChoices.value.map((choice) => ({
+				label: `${choice.connection.name} / ${choice.database}`,
+				action: () => chooseDatasource(choice),
+			})),
+		},
+		{ label: "", separator: true },
+		{ label: "Delete", icon: Trash2, variant: "destructive", action: askDelete },
+	];
 }
 
 /**
@@ -477,137 +525,41 @@ async function confirmDelete(): Promise<void> {
 				/>
 			</div>
 
-			<div
-				class="recall-scroll min-h-0 flex-1 overflow-y-auto"
-				role="tree"
-				aria-label="SQL files"
-			>
-				<p
-					v-if="roots.length === 0"
-					class="px-3 py-2 text-xs text-muted-foreground"
+			<!-- One menu for the whole tree. The rows are a plain recursive list
+			     rather than a virtualised one, but a single host keeps the item
+			     set in one place and opens at the pointer; whichever row was
+			     right-clicked resolves its own items. -->
+			<CustomContextMenu :items="menuItems" v-slot="contextMenuSlot">
+				<div
+					class="recall-scroll min-h-0 flex-1 overflow-y-auto"
+					role="tree"
+					aria-label="SQL files"
 				>
-					No files match the filter
-				</p>
-				<FileTreeNode
-					v-for="node in roots"
-					:key="node.path"
-					:node="node"
-					:depth="0"
-					:expanded="sqlFiles.expanded.has(node.path)"
-					:expanded-paths="sqlFiles.expanded"
-					:active-path="activePath"
-					:renaming-path="sqlFiles.renamingPath"
-					@toggle="sqlFiles.toggleExpanded"
-					@activate="onActivate"
-					@menu="onMenu"
-					@commit-rename="commitRename"
-					@cancel-rename="cancelRename"
-				/>
-			</div>
-
-			<DropdownMenu v-model:open="menuOpen">
-				<!-- `as-child` hands the anchor element straight to the popper, so
-				     the trigger IS the zero-size element. It is `fixed` because the
-				     pointer coordinates are viewport-relative while the panel sits
-				     offset inside the gutter. -->
-				<DropdownMenuTrigger as-child>
-					<span
-						class="pointer-events-none fixed size-0"
-						:style="{
-							left: `${menuAnchor.x}px`,
-							top: `${menuAnchor.y}px`,
-						}"
+					<p
+						v-if="roots.length === 0"
+						class="px-3 py-2 text-xs text-muted-foreground"
+					>
+						No files match the filter
+					</p>
+					<FileTreeNode
+						v-for="node in roots"
+						:key="node.path"
+						:node="node"
+						:depth="0"
+						:expanded="sqlFiles.expanded.has(node.path)"
+						:expanded-paths="sqlFiles.expanded"
+						:active-path="activePath"
+						:renaming-path="sqlFiles.renamingPath"
+						@toggle="sqlFiles.toggleExpanded"
+						@activate="onActivate"
+						@menu="
+							(node, event) => onMenu(node, event, contextMenuSlot.onContextMenu)
+						"
+						@commit-rename="commitRename"
+						@cancel-rename="cancelRename"
 					/>
-				</DropdownMenuTrigger>
-				<DropdownMenuContent class="w-56">
-					<!-- A directory cannot be opened, revealed or bound to a
-					     datasource, so its menu is about the directory itself. -->
-					<template v-if="menuNode?.isDir">
-						<DropdownMenuItem @select="createInMenu(false)">
-							<FilePlus2 aria-hidden="true" />
-							New file here…
-						</DropdownMenuItem>
-						<DropdownMenuItem @select="createInMenu(true)">
-							<FolderPlus aria-hidden="true" />
-							New folder here…
-						</DropdownMenuItem>
-						<DropdownMenuSeparator />
-						<DropdownMenuItem @select="cutFromMenu">
-							<Scissors aria-hidden="true" />
-							Cut
-						</DropdownMenuItem>
-						<DropdownMenuItem @select="copyFromMenu">
-							<Copy aria-hidden="true" />
-							Copy
-						</DropdownMenuItem>
-						<DropdownMenuItem
-							:disabled="sqlFiles.clipboard === null"
-							@select="pasteFromMenu"
-						>
-							<ClipboardPaste aria-hidden="true" />
-							Paste
-						</DropdownMenuItem>
-						<DropdownMenuSeparator />
-						<DropdownMenuItem @select="startRename">
-							<Pencil aria-hidden="true" />
-							Rename…
-						</DropdownMenuItem>
-						<DropdownMenuSeparator />
-						<DropdownMenuItem variant="destructive" @select="askDelete">
-							<Trash2 aria-hidden="true" />
-							Delete
-						</DropdownMenuItem>
-					</template>
-
-					<template v-else>
-						<DropdownMenuItem @select="openFromMenu">Open</DropdownMenuItem>
-						<DropdownMenuItem @select="startRename">
-							<Pencil aria-hidden="true" />
-							Rename…
-						</DropdownMenuItem>
-						<DropdownMenuItem @select="duplicateFromMenu">
-							<CopyPlus aria-hidden="true" />
-							Duplicate
-						</DropdownMenuItem>
-						<DropdownMenuItem @select="cutFromMenu">
-							<Scissors aria-hidden="true" />
-							Cut
-						</DropdownMenuItem>
-						<DropdownMenuItem @select="copyFromMenu">
-							<Copy aria-hidden="true" />
-							Copy
-						</DropdownMenuItem>
-						<DropdownMenuSeparator />
-						<DropdownMenuItem @select="reveal">
-							<FolderSearch aria-hidden="true" />
-							Reveal in Finder
-						</DropdownMenuItem>
-						<DropdownMenuItem @select="copyPath">
-							<Copy aria-hidden="true" />
-							Copy Path
-						</DropdownMenuItem>
-						<DropdownMenuSeparator />
-						<DropdownMenuSub>
-							<DropdownMenuSubTrigger>Datasource</DropdownMenuSubTrigger>
-							<DropdownMenuSubContent>
-								<DropdownMenuLabel>Run against</DropdownMenuLabel>
-								<DropdownMenuItem
-									v-for="choice in datasourceChoices"
-									:key="`${choice.connection.id}:${choice.database}`"
-									@select="chooseDatasource(choice)"
-								>
-									{{ choice.connection.name }} / {{ choice.database }}
-								</DropdownMenuItem>
-							</DropdownMenuSubContent>
-						</DropdownMenuSub>
-						<DropdownMenuSeparator />
-						<DropdownMenuItem variant="destructive" @select="askDelete">
-							<Trash2 aria-hidden="true" />
-							Delete
-						</DropdownMenuItem>
-					</template>
-				</DropdownMenuContent>
-			</DropdownMenu>
+				</div>
+			</CustomContextMenu>
 		</template>
 
 		<!-- Both dialogs live outside the tree so a scrolled panel never takes

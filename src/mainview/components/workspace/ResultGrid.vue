@@ -46,13 +46,12 @@ import {
 import { useShortcuts } from "../../composables/useShortcuts";
 import { registerResultFilterFocus } from "../../composables/useResultFilterFocus";
 import { Button } from "../ui/button";
+import CustomContextMenu from "../ui/CustomContextMenu.vue";
+import type { ContextMenuItem } from "../ui/CustomContextMenu.vue";
 import {
 	DropdownMenuCheckboxItem,
 	DropdownMenu,
 	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuLabel,
-	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -729,37 +728,74 @@ const hasSort = computed(() => sortColumn.value !== null);
 
 /** The column the header menu is open on; null while the menu is closed. */
 const menuColumn = ref<string | null>(null);
-const menuOpen = ref(false);
 /**
- * Virtual anchor for the header menu. `DropdownMenu` positions its content
- * against the trigger element, so a zero-size element parked at the pointer is
- * what puts the menu under the cursor rather than under the whole header.
+ * Items handed to the one shared `CustomContextMenu` host. Rebuilt on every
+ * open so each item's disabled state is read at the moment the menu is raised.
  */
-const menuAnchor = ref({ x: 0, y: 0 });
+const menuItems = ref<ContextMenuItem[]>([]);
 
-function openHeaderMenu(column: string, x: number, y: number): void {
+function openHeaderMenu(
+	column: string,
+	event: MouseEvent,
+	openMenu: (event: MouseEvent, items?: ContextMenuItem[]) => void,
+): void {
 	menuColumn.value = column;
-	menuAnchor.value = { x, y };
-	menuOpen.value = true;
+	menuItems.value = headerMenuItems();
+	// The just-built array rides the open call as an override so the open and
+	// the prop update share one event turn.
+	openMenu(event, menuItems.value);
 }
 
-function onHeaderContextMenu(column: string, event: MouseEvent): void {
+/**
+ * The actions a column header offers. Ascending and descending lead; "Clear
+ * sort" only means anything once a sort is applied, so a separator sets it
+ * apart.
+ */
+function headerMenuItems(): ContextMenuItem[] {
+	const column = menuColumn.value;
+	return [
+		{
+			label: "Sort ascending",
+			icon: ArrowUp,
+			disabled: !column,
+			action: sortMenuAscending,
+		},
+		{
+			label: "Sort descending",
+			icon: ArrowDown,
+			disabled: !column,
+			action: sortMenuDescending,
+		},
+		{ label: "", separator: true },
+		{ label: "Clear sort", disabled: !hasSort.value, action: clearSort },
+	];
+}
+
+function onHeaderContextMenu(
+	column: string,
+	event: MouseEvent,
+	openMenu: (event: MouseEvent, items?: ContextMenuItem[]) => void,
+): void {
 	if (!sortable.value) return;
 	// The resize handle stops the `pointerdown` that starts a drag, but a
 	// `contextmenu` is a separate event and still bubbles to the cell, so the
 	// handle has to be recognised by what was hit rather than assumed away.
 	const target = event.target instanceof Element ? event.target : null;
 	if (target?.closest(".grid-column-resize")) return;
-	event.preventDefault();
-	openHeaderMenu(column, event.clientX, event.clientY);
+	openHeaderMenu(column, event, openMenu);
 }
 
 /**
  * Keyboard route to the same menu: the ContextMenu key, Shift+F10, and the
- * menu key some keyboards send on their own. No pointer means no coordinates,
- * so the menu hangs off the header's own top-left corner.
+ * menu key some keyboards send on their own. A keyboard has no pointer, so a
+ * synthetic `MouseEvent` at the header's own bottom-left corner stands in for
+ * the right-click the shared host expects.
  */
-function onHeaderKeydown(column: string, event: KeyboardEvent): void {
+function onHeaderKeydown(
+	column: string,
+	event: KeyboardEvent,
+	openMenu: (event: MouseEvent, items?: ContextMenuItem[]) => void,
+): void {
 	if (!sortable.value) return;
 	const isMenuKey =
 		event.key === "ContextMenu" ||
@@ -772,7 +808,11 @@ function onHeaderKeydown(column: string, event: KeyboardEvent): void {
 	const cell = event.currentTarget;
 	if (!(cell instanceof HTMLElement)) return;
 	const rect = cell.getBoundingClientRect();
-	openHeaderMenu(column, rect.left, rect.bottom);
+	const anchor = new MouseEvent("contextmenu", {
+		clientX: rect.left,
+		clientY: rect.bottom,
+	});
+	openHeaderMenu(column, anchor, openMenu);
 }
 
 /** Menu entries, so the template never has to reach past a null column. */
@@ -1775,115 +1815,123 @@ function rowKey(_row: unknown, index: number): number {
 		     Two scrollers tied together by `syncHeaderScroll` keep the scrollbar
 		     pinned to the pane's right edge, which is also what makes the last
 		     column's right border land beside it rather than under it. -->
-		<div
-			ref="headerScrollEl"
-			class="grid-header-scroll shrink-0 overflow-x-auto overflow-y-hidden"
-			role="row"
-			:style="{ height: `${HEADER_HEIGHT}px` }"
-			@scroll="syncBodyScroll"
-		>
-			<!-- `headerContentStyle`, not the bare `totalWidth`: the body's
-			     vertical scrollbar makes its horizontal range the wider of the
-			     two, and matching that range is what keeps the rightmost
-			     header over its column. See `measureScrollbarGutter`. -->
+		<!-- One menu for every header. The headers live in a horizontal
+		     scroller over a virtualised body, so a per-cell menu would remount
+		     with it; this single host is asked to open at the pointer or the
+		     focused header by whichever cell raised it. -->
+		<CustomContextMenu :items="menuItems" v-slot="contextMenuSlot">
 			<div
-				class="flex h-full"
-				role="presentation"
-				:style="headerContentStyle"
+				ref="headerScrollEl"
+				class="grid-header-scroll shrink-0 overflow-x-auto overflow-y-hidden"
+				role="row"
+				:style="{ height: `${HEADER_HEIGHT}px` }"
+				@scroll="syncBodyScroll"
 			>
-			<!-- The gutter is reference rather than content, which makes its
-			     header the one cell in the row whose meaning is not in its own
-			     text. The trigger is the cell, so nothing about the pin moves. -->
-			<Tooltip>
-				<TooltipTrigger as-child>
-					<div
-						class="grid-header-cell grid-row-number"
-						role="columnheader"
-						:style="rowNumberStyle"
-						aria-label="Row number"
-					>
-						#
-					</div>
-				</TooltipTrigger>
-				<TooltipContent class="max-w-lg">
-					Row number — 1-based position across all pages
-				</TooltipContent>
-			</Tooltip>
-			<!-- `tabindex`/`aria-haspopup` because a sort is now a menu: a pointer is
-			     not the only way to open it, and `aria-label` names the column for a
-			     screen reader that would otherwise read the truncated text.
+				<!-- `headerContentStyle`, not the bare `totalWidth`: the body's
+				     vertical scrollbar makes its horizontal range the wider of the
+				     two, and matching that range is what keeps the rightmost
+				     header over its column. See `measureScrollbarGutter`. -->
+				<div
+					class="flex h-full"
+					role="presentation"
+					:style="headerContentStyle"
+				>
+					<!-- The gutter is reference rather than content, which makes its
+					     header the one cell in the row whose meaning is not in its own
+					     text. The trigger is the cell, so nothing about the pin moves. -->
+					<Tooltip>
+						<TooltipTrigger as-child>
+							<div
+								class="grid-header-cell grid-row-number"
+								role="columnheader"
+								:style="rowNumberStyle"
+								aria-label="Row number"
+							>
+								#
+							</div>
+						</TooltipTrigger>
+						<TooltipContent class="max-w-lg">
+							Row number — 1-based position across all pages
+						</TooltipContent>
+					</Tooltip>
+					<!-- `tabindex`/`aria-haspopup` because a sort is now a menu: a pointer is
+					     not the only way to open it, and `aria-label` names the column for a
+					     screen reader that would otherwise read the truncated text.
 
-			     The trigger is the cell rather than the label span: it merges its
-			     listeners onto the child and never calls `preventDefault`, so the
-			     drag, the click, the menu and the keyboard route all reach the same
-			     element and the tooltip anchors to the whole column. Disabled during
-			     a reorder, which walks the pointer across every other header; `disabled`
-			     rather than `v-if` because unmounting would unmount the drag's cell. -->
-			<Tooltip
-				v-for="(column, columnIndex) in columns"
-				:key="column"
-				:disabled="columnDrag !== null"
-			>
-				<TooltipTrigger as-child>
-					<div
-						class="grid-header-cell"
-						:class="{
-							'opacity-60': columnDrag?.moved === true && columnDrag?.column === column,
-						}"
-						role="columnheader"
-						:style="cellStyleFor(column)"
-						:aria-label="column"
-						tabindex="0"
-						:aria-haspopup="sortable ? 'menu' : undefined"
-						:data-selected="columnIsSelected(columnIndex)"
-						:data-col="columnIndex"
-						@click="onHeaderClick(columnIndex, $event)"
-						@pointerdown="startColumnDrag($event, column, columnIndex)"
-						@contextmenu="onHeaderContextMenu(column, $event)"
-						@keydown="onHeaderKeydown(column, $event)"
+					     The trigger is the cell rather than the label span: it merges its
+					     listeners onto the child and never calls `preventDefault`, so the
+					     drag, the click, the menu and the keyboard route all reach the same
+					     element and the tooltip anchors to the whole column. Disabled during
+					     a reorder, which walks the pointer across every other header; `disabled`
+					     rather than `v-if` because unmounting would unmount the drag's cell. -->
+					<Tooltip
+						v-for="(column, columnIndex) in columns"
+						:key="column"
+						:disabled="columnDrag !== null"
 					>
-						<span class="truncate">{{ column }}</span>
-						<ArrowUp
-							v-if="sortIcon(column) === 'asc'"
-							class="size-3 shrink-0 text-primary"
-							aria-hidden="true"
-						/>
-						<ArrowDown
-							v-else-if="sortIcon(column) === 'desc'"
-							class="size-3 shrink-0 text-primary"
-							aria-hidden="true"
-						/>
-						<!-- Where the drop lands. The header is a flex row with no gap
-						     to draw in, so the rule rides the edge of the column the
-						     drop displaces; it is decorative and must never take the
-						     press that drives the gesture. -->
-						<span
-							v-if="dropMarker?.column === column"
-							aria-hidden="true"
-							class="pointer-events-none absolute inset-y-0 w-0.5 bg-primary"
-							:class="dropMarker?.edge === 'trailing' ? 'right-0' : 'left-0'"
-						/>
-						<!-- The handle sits on the column's trailing edge; a
-						     double-click on it re-fits the column to its content,
-						     undoing the manual width. -->
-						<div
-							class="grid-column-resize"
-							role="separator"
-							aria-orientation="vertical"
-							:aria-label="`Resize ${column}`"
-							:title="`Resize ${column} — double-click to fit to content`"
-							@pointerdown="startColumnResize($event, column)"
-							@dblclick.stop="refitColumnWidth(column)"
-						/>
-					</div>
-				</TooltipTrigger>
-				<!-- Past the primitive's own `max-w-xs`: a column name is an
-				     identifier, and reading one is the entire reason the
-				     tooltip exists. -->
-				<TooltipContent class="max-w-lg">{{ column }}</TooltipContent>
-			</Tooltip>
+						<TooltipTrigger as-child>
+							<div
+								class="grid-header-cell"
+								:class="{
+									'opacity-60': columnDrag?.moved === true && columnDrag?.column === column,
+								}"
+								role="columnheader"
+								:style="cellStyleFor(column)"
+								:aria-label="column"
+								tabindex="0"
+								:aria-haspopup="sortable ? 'menu' : undefined"
+								:data-selected="columnIsSelected(columnIndex)"
+								:data-col="columnIndex"
+								@click="onHeaderClick(columnIndex, $event)"
+								@pointerdown="startColumnDrag($event, column, columnIndex)"
+								@contextmenu="
+									onHeaderContextMenu(column, $event, contextMenuSlot.onContextMenu)
+								"
+								@keydown="onHeaderKeydown(column, $event, contextMenuSlot.onContextMenu)"
+							>
+								<span class="truncate">{{ column }}</span>
+								<ArrowUp
+									v-if="sortIcon(column) === 'asc'"
+									class="size-3 shrink-0 text-primary"
+									aria-hidden="true"
+								/>
+								<ArrowDown
+									v-else-if="sortIcon(column) === 'desc'"
+									class="size-3 shrink-0 text-primary"
+									aria-hidden="true"
+								/>
+								<!-- Where the drop lands. The header is a flex row with no gap
+								     to draw in, so the rule rides the edge of the column the
+								     drop displaces; it is decorative and must never take the
+								     press that drives the gesture. -->
+								<span
+									v-if="dropMarker?.column === column"
+									aria-hidden="true"
+									class="pointer-events-none absolute inset-y-0 w-0.5 bg-primary"
+									:class="dropMarker?.edge === 'trailing' ? 'right-0' : 'left-0'"
+								/>
+								<!-- The handle sits on the column's trailing edge; a
+								     double-click on it re-fits the column to its content,
+								     undoing the manual width. -->
+								<div
+									class="grid-column-resize"
+									role="separator"
+									aria-orientation="vertical"
+									:aria-label="`Resize ${column}`"
+									:title="`Resize ${column} — double-click to fit to content`"
+									@pointerdown="startColumnResize($event, column)"
+									@dblclick.stop="refitColumnWidth(column)"
+								/>
+							</div>
+						</TooltipTrigger>
+						<!-- Past the primitive's own `max-w-xs`: a column name is an
+						     identifier, and reading one is the entire reason the
+						     tooltip exists. -->
+						<TooltipContent class="max-w-lg">{{ column }}</TooltipContent>
+					</Tooltip>
+				</div>
 			</div>
-		</div>
+		</CustomContextMenu>
 
 		<!-- `RecycleScroller` is the scroller, so the keyboard, focus and ARIA
 		     wiring has to land on it rather than on a wrapper that never
@@ -1986,42 +2034,6 @@ function rowKey(_row: unknown, index: number): number {
 					</div>
 				</template>
 			</RecycleScroller>
-			<!-- One menu for every header. The headers live in a horizontal
-			     scroller over a virtualised body, so a per-cell menu would
-			     remount with it; this one is parked here, once, and anchored at
-			     the pointer or the focused header instead. -->
-			<DropdownMenu v-if="sortable" v-model:open="menuOpen">
-				<!-- `as-child` hands the anchor element straight to the popper,
-				     so the trigger IS the zero-size element. It is `fixed`
-				     because the coordinates are viewport-relative while the
-				     grid sits offset inside the workspace pane. -->
-				<DropdownMenuTrigger as-child>
-					<span
-						class="pointer-events-none fixed size-0"
-						:style="{
-							left: `${menuAnchor.x}px`,
-							top: `${menuAnchor.y}px`,
-						}"
-						aria-hidden="true"
-					/>
-				</DropdownMenuTrigger>
-				<DropdownMenuContent class="w-48" aria-label="Column actions">
-					<DropdownMenuLabel class="truncate">{{ menuColumn }}</DropdownMenuLabel>
-					<DropdownMenuItem :disabled="!menuColumn" @select="sortMenuAscending">
-						<ArrowUp aria-hidden="true" />
-						Sort ascending
-					</DropdownMenuItem>
-					<DropdownMenuItem :disabled="!menuColumn" @select="sortMenuDescending">
-						<ArrowDown aria-hidden="true" />
-						Sort descending
-					</DropdownMenuItem>
-					<DropdownMenuSeparator />
-					<DropdownMenuItem :disabled="!hasSort" @select="clearSort">
-						Clear sort
-					</DropdownMenuItem>
-				</DropdownMenuContent>
-			</DropdownMenu>
-
 			<!-- The focused cell's value in full, over the cells to its right.
 			     The layer is clipped to the body's viewport and starts right of
 			     the pinned gutter, so the box can never reach the header, the

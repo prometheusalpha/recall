@@ -10,12 +10,8 @@ import DatabaseVisibilityDialog from "../dialogs/DatabaseVisibilityDialog.vue";
 import TreeRow from "./TreeRow.vue";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
+import CustomContextMenu from "../ui/CustomContextMenu.vue";
+import type { ContextMenuItem } from "../ui/CustomContextMenu.vue";
 import { flattenTree } from "../../composables/useFlatTree";
 import type { FlatTreeNode } from "../../composables/useFlatTree";
 import { errorMessage } from "../../lib/rpc";
@@ -174,14 +170,12 @@ const emit = defineEmits<{
 
 /** The connection whose context menu is open; null while the menu is closed. */
 const menuConnectionId = ref<string | null>(null);
-const menuOpen = ref(false);
 /**
- * Virtual anchor for the context menu. `DropdownMenu` positions its content
- * against the trigger element, so a zero-size element parked at the pointer is
- * what puts the menu under the cursor rather than under the whole tree. The
- * menu is opened by the right-click handler, never by clicking this.
+ * Items handed to the one shared `CustomContextMenu` host. Rebuilt on every
+ * open so each item's disabled state is read at the moment of the right-click
+ * rather than from an array built for an earlier row.
  */
-const menuAnchor = ref({ x: 0, y: 0 });
+const menuItems = ref<ContextMenuItem[]>([]);
 
 /**
  * The profile whose databases are being shown or hidden, and whether that
@@ -1003,7 +997,10 @@ function childCountOf(node: TreeNode): number | undefined {
  * Row props for one scroller slot. Typed on the slot payload rather than the
  * slot itself so the binding stays fully checked at the `v-bind` site.
  */
-function rowBinding(slot: unknown): TreeRowBinding {
+function rowBinding(
+	slot: unknown,
+	openMenu: (event: MouseEvent, items?: ContextMenuItem[]) => void,
+): TreeRowBinding {
 	const { item } = slot as { item: FlatTreeNode<TreeNode> };
 	const node = item.node;
 	const leaf = node.kind === "leaf" ? node : undefined;
@@ -1047,15 +1044,51 @@ function rowBinding(slot: unknown): TreeRowBinding {
 		contextable: node.kind === "connection",
 		onToggle: () => toggle(node),
 		onActivate: () => activate(node),
-		onContextmenu: (event: MouseEvent) => onRowContextMenu(node, event),
+		onContextmenu: (event: MouseEvent) => onRowContextMenu(node, event, openMenu),
 	};
 }
 
-function onRowContextMenu(node: TreeNode, event: MouseEvent): void {
+function onRowContextMenu(
+	node: TreeNode,
+	event: MouseEvent,
+	openMenu: (event: MouseEvent, items?: ContextMenuItem[]) => void,
+): void {
 	if (node.kind !== "connection") return;
 	menuConnectionId.value = node.id;
-	menuAnchor.value = { x: event.clientX, y: event.clientY };
-	menuOpen.value = true;
+	menuItems.value = connectionMenuItems();
+	// The just-built array rides the open call as an override: the prop update
+	// and the open land in the same event turn, so reading `menuItems` back
+	// after the flush would race the very state this handler just set.
+	openMenu(event, menuItems.value);
+}
+
+/**
+ * The actions a connection row offers. Reconnect leads because it is what a
+ * broken session wants; Edit and the visibility dialog configure the session
+ * and the tree respectively, so they follow.
+ */
+function connectionMenuItems(): ContextMenuItem[] {
+	const id = menuConnectionId.value;
+	return [
+		{
+			label: "Reconnect",
+			icon: RefreshCw,
+			disabled: !id || connections.status[id] === "connecting",
+			action: reconnectConnection,
+		},
+		{
+			label: "Edit connection",
+			icon: Pencil,
+			disabled: !id,
+			action: editConnection,
+		},
+		{
+			label: "Databases…",
+			icon: Database,
+			disabled: !id,
+			action: manageDatabases,
+		},
+	];
 }
 
 function editConnection(): void {
@@ -1221,65 +1254,25 @@ defineExpose({ collapseAll, locateActiveTab });
 			<Button size="sm" @click="emit('new-connection')">New connection</Button>
 		</div>
 
-		<RecycleScroller
-			v-else
-			ref="scroller"
-			class="recall-scroll min-h-0 flex-1"
-			:items="rows"
-			:item-size="ROW_HEIGHT"
-			:buffer="ROW_BUFFER"
-			key-field="key"
-			role="tree"
-			aria-label="Connections"
-		>
-			<template #default="slot">
-				<TreeRow v-bind="rowBinding(slot)" />
-			</template>
-		</RecycleScroller>
-
 		<!-- One menu for every row. Rows are virtualised, so a per-row menu
-		     would remount with every scroll; this one is parked next to the
-		     scroller and anchored at the pointer instead. -->
-		<DropdownMenu v-model:open="menuOpen">
-			<!-- `as-child` hands the anchor element straight to the popper, so
-			     the trigger IS the zero-size element. It is `fixed` because the
-			     pointer coordinates are viewport-relative while the sidebar sits
-			     offset inside the gutter. -->
-			<DropdownMenuTrigger as-child>
-				<span
-					class="pointer-events-none fixed size-0"
-					:style="{
-						left: `${menuAnchor.x}px`,
-						top: `${menuAnchor.y}px`,
-					}"
-					aria-hidden="true"
-				/>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent class="w-48" aria-label="Connection actions">
-				<!-- Reconnect first: it is the action a broken session wants,
-				     while Edit is the one every row is offered. -->
-				<DropdownMenuItem
-					:disabled="
-						!menuConnectionId ||
-						connections.status[menuConnectionId] === 'connecting'
-					"
-					@select="reconnectConnection"
-				>
-					<RefreshCw aria-hidden="true" />
-					Reconnect
-				</DropdownMenuItem>
-				<DropdownMenuItem :disabled="!menuConnectionId" @select="editConnection">
-					<Pencil aria-hidden="true" />
-					Edit connection
-				</DropdownMenuItem>
-				<!-- Last: it is the one action here that configures the tree
-				     itself rather than the session behind it. -->
-				<DropdownMenuItem :disabled="!menuConnectionId" @select="manageDatabases">
-					<Database aria-hidden="true" />
-					Databases…
-				</DropdownMenuItem>
-			</DropdownMenuContent>
-		</DropdownMenu>
+		     would remount with every scroll; this single host is asked to open
+		     at the pointer by whichever row was right-clicked. -->
+		<CustomContextMenu v-else :items="menuItems" v-slot="contextMenuSlot">
+			<RecycleScroller
+				ref="scroller"
+				class="recall-scroll min-h-0 flex-1"
+				:items="rows"
+				:item-size="ROW_HEIGHT"
+				:buffer="ROW_BUFFER"
+				key-field="key"
+				role="tree"
+				aria-label="Connections"
+			>
+				<template #default="slot">
+					<TreeRow v-bind="rowBinding(slot, contextMenuSlot.onContextMenu)" />
+				</template>
+			</RecycleScroller>
+		</CustomContextMenu>
 
 		<DatabaseVisibilityDialog
 			v-model:open="visibilityOpen"

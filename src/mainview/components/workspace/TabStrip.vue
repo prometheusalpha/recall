@@ -12,13 +12,8 @@ import { PinIcon, PlusIcon, XIcon } from "lucide-vue-next";
 import { useTabsStore } from "../../stores/tabs";
 import type { Tab } from "../../stores/tabs";
 import { useTabClose } from "../../composables/useTabClose";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuSeparator,
-	DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
+import CustomContextMenu from "../ui/CustomContextMenu.vue";
+import type { ContextMenuItem } from "../ui/CustomContextMenu.vue";
 import { Separator } from "../ui/separator";
 import { Button } from "../ui/button";
 
@@ -56,7 +51,6 @@ function isDirty(tab: Tab): boolean {
  * Pointer drag reorder
  * ---------------------------------------------------------------------- */
 
-const stripEl = ref<HTMLDivElement | null>(null);
 const draggingTabId = ref<string | null>(null);
 const dropTargetId = ref<string | null>(null);
 const dropPosition = ref<"before" | "after" | null>(null);
@@ -194,29 +188,49 @@ const { requestClose, requestCloseOthers } = useTabClose();
  * Context menu and inline rename
  * ---------------------------------------------------------------------- */
 
-const menuOpen = ref(false);
 const menuTabId = ref<string | null>(null);
-const menuAnchorStyle = ref<{ left: string; top: string }>({
-	left: "0px",
-	top: "0px",
-});
+/**
+ * Items handed to the one shared `CustomContextMenu` host. Rebuilt on every
+ * open so a tab's pinned state and "close others" availability are read at the
+ * moment of the right-click rather than from an array built for an earlier tab.
+ */
+const menuItems = ref<ContextMenuItem[]>([]);
 const menuTab = computed(
 	() => tabsStore.tabs.find((tab) => tab.id === menuTabId.value) ?? null,
 );
 
-function onPillContextMenu(tab: Tab, event: MouseEvent): void {
-	event.preventDefault();
-	const strip = stripEl.value;
-	if (strip) {
-		const rect = strip.getBoundingClientRect();
-		// The strip scrolls horizontally, so absolute children do too.
-		menuAnchorStyle.value = {
-			left: `${event.clientX - rect.left + strip.scrollLeft}px`,
-			top: `${event.clientY - rect.top}px`,
-		};
-	}
+function onPillContextMenu(
+	tab: Tab,
+	event: MouseEvent,
+	openMenu: (event: MouseEvent, items?: ContextMenuItem[]) => void,
+): void {
 	menuTabId.value = tab.id;
-	menuOpen.value = true;
+	menuItems.value = tabMenuItems();
+	// Pass the just-built array through as the open-call override so the open
+	// and the prop update share one event turn.
+	openMenu(event, menuItems.value);
+}
+
+/**
+ * The actions a tab pill offers. Rename and Pin lead; "Close others" is the
+ * only one that acts on a sibling, so a separator sets it apart.
+ */
+function tabMenuItems(): ContextMenuItem[] {
+	const tab = menuTab.value;
+	return [
+		{ label: "Rename", disabled: !tab, action: startRename },
+		{
+			label: tab?.pinned ? "Unpin" : "Pin",
+			disabled: !tab,
+			action: toggleMenuPin,
+		},
+		{ label: "", separator: true },
+		{
+			label: "Close others",
+			disabled: !canCloseOthers.value,
+			action: closeMenuOthers,
+		},
+	];
 }
 
 const editingTabId = ref<string | null>(null);
@@ -231,7 +245,6 @@ function setRenameInput(el: unknown): void {
 async function startRename(): Promise<void> {
 	const tab = menuTab.value;
 	if (!tab) return;
-	menuOpen.value = false;
 	editingTabId.value = tab.id;
 	renameDraft.value = tab.title;
 	await nextTick();
@@ -266,114 +279,96 @@ const canCloseOthers = computed(
 function closeMenuOthers(): void {
 	const tab = menuTab.value;
 	if (!tab) return;
-	// Close the dropdown first so it is not competing with the dialog for focus.
-	menuOpen.value = false;
+	// The shared host has already closed the menu by the time this runs, so it
+	// is not competing with the dialog for focus.
 	requestCloseOthers(tab.id);
 }
 </script>
 
 <template>
 	<div
-		ref="stripEl"
 		class="tab-strip relative border-b border-border"
 		role="tablist"
 		aria-label="Open tabs"
 	>
-		<template v-for="entry in entries" :key="entry.kind === 'tab' ? entry.tab.id : entry.key">
-			<Separator
-				v-if="entry.kind === 'separator'"
-				orientation="vertical"
-				class="mx-0.5 h-4 self-center"
-			/>
-			<div
-				v-else
-				class="tab-pill"
-				role="tab"
-				:data-tab-id="entry.tab.id"
-				:data-active="entry.tab.id === activeId"
-				:data-dragging="draggingTabId === entry.tab.id"
-				:data-drop-before="dropTargetId === entry.tab.id && dropPosition === 'before'"
-				:data-drop-after="dropTargetId === entry.tab.id && dropPosition === 'after'"
-				:aria-selected="entry.tab.id === activeId"
-				:title="entry.tab.title"
-				tabindex="0"
-				@pointerdown="onPillPointerDown($event, entry.tab)"
-				@click="onPillClick(entry.tab)"
-				@keydown.enter.prevent="onPillClick(entry.tab)"
-				@keydown.space.prevent="onPillClick(entry.tab)"
-				@contextmenu="onPillContextMenu(entry.tab, $event)"
+		<!-- One menu for every pill: the host is shared so a strip of many tabs
+		     carries one menu, not one per pill. -->
+		<CustomContextMenu :items="menuItems" v-slot="contextMenuSlot">
+			<template v-for="entry in entries" :key="entry.kind === 'tab' ? entry.tab.id : entry.key">
+				<Separator
+					v-if="entry.kind === 'separator'"
+					orientation="vertical"
+					class="mx-0.5 h-4 self-center"
+				/>
+				<div
+					v-else
+					class="tab-pill"
+					role="tab"
+					:data-tab-id="entry.tab.id"
+					:data-active="entry.tab.id === activeId"
+					:data-dragging="draggingTabId === entry.tab.id"
+					:data-drop-before="dropTargetId === entry.tab.id && dropPosition === 'before'"
+					:data-drop-after="dropTargetId === entry.tab.id && dropPosition === 'after'"
+					:aria-selected="entry.tab.id === activeId"
+					:title="entry.tab.title"
+					tabindex="0"
+					@pointerdown="onPillPointerDown($event, entry.tab)"
+					@click="onPillClick(entry.tab)"
+					@keydown.enter.prevent="onPillClick(entry.tab)"
+					@keydown.space.prevent="onPillClick(entry.tab)"
+					@contextmenu="
+						onPillContextMenu(entry.tab, $event, contextMenuSlot.onContextMenu)
+					"
+				>
+					<PinIcon
+						v-if="entry.tab.pinned"
+						class="size-3 shrink-0 text-muted-foreground"
+						aria-hidden="true"
+					/>
+					<input
+						v-if="editingTabId === entry.tab.id"
+						:ref="setRenameInput"
+						v-model="renameDraft"
+						type="text"
+						class="w-28 rounded-sm border border-border bg-background px-1 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+						style="user-select: text"
+						aria-label="Tab title"
+						@click.stop
+						@pointerdown.stop
+						@keydown.enter.stop.prevent="commitRename"
+						@keydown.esc.stop.prevent="cancelRename"
+						@keydown.space.stop
+						@blur="commitRename"
+					/>
+					<span v-else class="min-w-0 grow truncate">
+						{{ entry.tab.title }}{{ isDirty(entry.tab) ? "*" : "" }}
+					</span>
+
+					<template v-if="editingTabId !== entry.tab.id">
+						<button
+							type="button"
+							class="tab-close"
+							:aria-label="`Close ${entry.tab.title}`"
+							@click.stop="requestClose(entry.tab.id)"
+						>
+							<XIcon class="size-3" aria-hidden="true" />
+						</button>
+					</template>
+				</div>
+			</template>
+
+			<!-- `self-center` because the strip stretches its children: a sized
+			     button would otherwise sit on the top edge instead of on the
+			     pills' optical centre. -->
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				class="shrink-0 self-center"
+				aria-label="New query tab"
+				@click="emit('new-tab')"
 			>
-				<PinIcon
-					v-if="entry.tab.pinned"
-					class="size-3 shrink-0 text-muted-foreground"
-					aria-hidden="true"
-				/>
-				<input
-					v-if="editingTabId === entry.tab.id"
-					:ref="setRenameInput"
-					v-model="renameDraft"
-					type="text"
-					class="w-28 rounded-sm border border-border bg-background px-1 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
-					style="user-select: text"
-					aria-label="Tab title"
-					@click.stop
-					@pointerdown.stop
-					@keydown.enter.stop.prevent="commitRename"
-					@keydown.esc.stop.prevent="cancelRename"
-					@keydown.space.stop
-					@blur="commitRename"
-				/>
-				<span v-else class="min-w-0 grow truncate">
-					{{ entry.tab.title }}{{ isDirty(entry.tab) ? "*" : "" }}
-				</span>
-
-				<template v-if="editingTabId !== entry.tab.id">
-					<button
-						type="button"
-						class="tab-close"
-						:aria-label="`Close ${entry.tab.title}`"
-						@click.stop="requestClose(entry.tab.id)"
-					>
-						<XIcon class="size-3" aria-hidden="true" />
-					</button>
-				</template>
-			</div>
-		</template>
-
-		<!-- `self-center` because the strip stretches its children: a sized
-		     button would otherwise sit on the top edge instead of on the
-		     pills' optical centre. -->
-		<Button
-			variant="ghost"
-			size="icon-sm"
-			class="shrink-0 self-center"
-			aria-label="New query tab"
-			@click="emit('new-tab')"
-		>
-			<PlusIcon aria-hidden="true" />
-		</Button>
-
-		<!-- One menu, anchored to an invisible span parked at the pointer. -->
-		<DropdownMenu v-model:open="menuOpen">
-			<DropdownMenuTrigger as-child>
-				<span
-					class="pointer-events-none absolute left-0 top-0 size-px"
-					:style="menuAnchorStyle"
-					aria-hidden="true"
-				/>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent class="w-44">
-				<DropdownMenuItem :disabled="!menuTab" @select="startRename">
-					Rename
-				</DropdownMenuItem>
-				<DropdownMenuItem :disabled="!menuTab" @select="toggleMenuPin">
-					{{ menuTab?.pinned ? "Unpin" : "Pin" }}
-				</DropdownMenuItem>
-				<DropdownMenuSeparator />
-				<DropdownMenuItem :disabled="!canCloseOthers" @select="closeMenuOthers">
-					Close others
-				</DropdownMenuItem>
-			</DropdownMenuContent>
-		</DropdownMenu>
+				<PlusIcon aria-hidden="true" />
+			</Button>
+		</CustomContextMenu>
 	</div>
 </template>
