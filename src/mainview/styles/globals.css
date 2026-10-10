@@ -178,12 +178,14 @@ body.panel-resizing * {
 	cursor: col-resize;
 }
 
-/* The horizontal splitter is the editor/results divider, and it is a band
-   across the whole pane: its hit area is wider than the line it draws, so the
-   drag is reachable without the divider growing into a bar. The visible edge
-   below belongs to the pane, and this band is only the grip. */
+/* The horizontal splitter is the editor/results divider: a hairline along its
+   own top edge, plus a band across the whole pane whose hit area is wider than
+   that line, so the drag is reachable without the divider growing into a bar.
+   `--ring` rather than `--border`: the border token is translucent in dark
+   mode, and a divider that disappears in one theme is not a divider. */
 .splitpanes--horizontal > .splitpanes__splitter {
 	border-right: none !important;
+	border-top: 1px solid var(--ring) !important;
 	/* In a column flex container the splitter stretches to the pane's width on
 	   its own; saying so keeps it that way whatever the flex defaults do. */
 	width: 100% !important;
@@ -212,18 +214,6 @@ body.panel-resizing * {
 .splitpanes--horizontal.splitpanes--dragging > .splitpanes__pane .cm-editor * {
 	user-select: none;
 	-webkit-user-select: none;
-}
-
-/* The editor/result divider. The splitter's own top border is one hairline
-  inside a gap, which reads as almost nothing at the panel's rounded edges;
-  the rule below is drawn on the editor pane itself so the two halves are
-  always separated by a visible line, splitter drag state or not. It is
-  `--ring` rather than `--border` because the border token is translucent in
-  dark mode, and a divider that disappears in one theme is not a divider. */
-/* `:has(+ .splitpanes__pane)` rather than `:first-child`: the table-tab layout
-  is a single pane, and there is no result set under an editor to separate. */
-.splitpanes--horizontal > .splitpanes__pane:has(+ .splitpanes__pane) {
-	border-bottom: 1px solid var(--ring);
 }
 
 /* Hover tint for the whole band. It sits under the grip (`::before` carries a

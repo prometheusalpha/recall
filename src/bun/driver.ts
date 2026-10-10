@@ -515,3 +515,28 @@ export async function probeStatementColumns(
 		return [];
 	}
 }
+
+/**
+ * Exact row count of a whole table, ignoring whatever filter the caller shows.
+ *
+ * `COUNT(*)` is a full scan on both dialects — the expense the table tab's
+ * paging exists to avoid — so it is asked for explicitly, not on every load.
+ */
+export async function countTableRows(
+	db: SQL,
+	driver: Driver,
+	database: string,
+	schema: string,
+	table: string,
+): Promise<number> {
+	const rows = (await db.unsafe(
+		`SELECT COUNT(*) AS count FROM ${driver.qualify(database, schema, table)}`,
+	)) as Array<Record<string, unknown>>;
+	const value = rows[0]?.count;
+	// Postgres widens `COUNT(*)` to `bigint`, which the driver may surface as a
+	// bigint or, when it is too large for a JS number, as a string.
+	if (typeof value === "number") return value;
+	if (typeof value === "bigint") return Number(value);
+	if (typeof value === "string") return Number(value);
+	return 0;
+}

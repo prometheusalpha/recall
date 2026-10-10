@@ -17,7 +17,7 @@ import { useQueryStore } from "../../stores/query";
 import { useTabsStore } from "../../stores/tabs";
 import type { Tab } from "../../stores/tabs";
 import { toast } from "../../composables/useToast";
-import { errorMessage, rpc } from "../../lib/rpc";
+import { errorMessage, RPC_TIMEOUTS, rpc } from "../../lib/rpc";
 import ResultGrid from "./ResultGrid.vue";
 import SqlEditor from "./SqlEditor.vue";
 import StatementBar from "./StatementBar.vue";
@@ -326,6 +326,52 @@ function onPageSizeChange(size: number): void {
 const hasNextPage = computed(
 	() => (activeResult.value?.rows.length ?? 0) >= activePageSize.value,
 );
+
+/**
+ * The tab's whole-table row count, once the user asks for it, and whether that
+ * count is in flight. `COUNT(*)` is a full scan, so it is never asked for on
+ * load — the count button is the one place that pays for it. Kept per tab so
+ * switching away and back does not pay for it twice.
+ */
+const tableRowCount = ref<Record<string, number>>({});
+const tableCountBusy = ref<Record<string, boolean>>({});
+
+const activeRowCount = computed(() =>
+	tabId.value ? (tableRowCount.value[tabId.value] ?? null) : null,
+);
+const activeCountBusy = computed(() =>
+	tabId.value ? tableCountBusy.value[tabId.value] === true : false,
+);
+
+/** Runs the whole-table `COUNT(*)` the result bar's count button asks for. */
+async function countActiveTable(): Promise<void> {
+	const tab = activeTab.value;
+	const id = tabId.value;
+	if (!tab || !id || tab.mode !== "table") return;
+	if (tableCountBusy.value[id] === true || tableRowCount.value[id] !== undefined) {
+		return;
+	}
+	tableCountBusy.value = { ...tableCountBusy.value, [id]: true };
+	try {
+		// The tab can be restored from disk before its connection exists, so the
+		// count is serialised behind `connect` the same way the key-column read is.
+		await connectionsStore.ensureConnected(tab.connectionId);
+		const count = await rpc.request.countTable(
+			{
+				connectionId: tab.connectionId,
+				database: tab.database,
+				schema: tab.schema,
+				table: tab.table,
+			},
+			{ maxRequestTime: RPC_TIMEOUTS.execute },
+		);
+		tableRowCount.value = { ...tableRowCount.value, [id]: count };
+	} catch (err) {
+		toast(errorMessage(err));
+	} finally {
+		tableCountBusy.value = { ...tableCountBusy.value, [id]: false };
+	}
+}
 
 /**
  * Table tabs are read-only views, so their rows come from one `SELECT *`
@@ -685,8 +731,11 @@ async function reconnectActive(): Promise<void> {
 					:page-size="activePageSize"
 					:page-size-options="activePageSizeOptions"
 					:has-next-page="hasNextPage"
+					:row-count="activeRowCount"
+					:count-busy="activeCountBusy"
 					@update:page="onPageChange"
 					@update:page-size="onPageSizeChange"
+					@count="countActiveTable"
 					@rerun="rerunActive"
 					@sort="onGridSort"
 					@update:visible-columns="setVisibleColumns"

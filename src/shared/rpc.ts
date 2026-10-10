@@ -136,6 +136,20 @@ export type BunRequests = {
 		response: string;
 	};
 	/**
+	 * Exact row count of a table, for the result bar's count button. A whole
+	 * count, not the page or the filtered view — the statement the table tab
+	 * runs carries a `LIMIT`, so its `rows.length` is a floor, never a total.
+	 */
+	countTable: {
+		params: {
+			connectionId: string;
+			database: string;
+			schema: string;
+			table: string;
+		};
+		response: number;
+	};
+	/**
 	 * Rewrite one cell of a table row, addressed by its primary key. The caller
 	 * sends the key columns it already rendered, so the backend never has to
 	 * re-discover the table's keys.

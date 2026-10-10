@@ -122,6 +122,14 @@ const props = withDefaults(
 		pageSizeOptions?: number[];
 		/** Whether the page that produced this result came back full. */
 		hasNextPage?: boolean;
+		/**
+		 * The table's whole row count, once the caller has run it; `null` until
+		 * then. Only the table branch of the result bar reads it — a query
+		 * result's length is already its total.
+		 */
+		rowCount?: number | null;
+		/** True while the caller's whole-table `COUNT(*)` is running. */
+		countBusy?: boolean;
 	}>(),
 	{
 		columnWidth: DEFAULT_COLUMN_WIDTH,
@@ -134,6 +142,8 @@ const props = withDefaults(
 		pageSize: 100,
 		pageSizeOptions: () => [100, 500, 1000, 5000],
 		hasNextPage: false,
+		rowCount: null,
+		countBusy: false,
 	},
 );
 
@@ -166,6 +176,12 @@ const emit = defineEmits<{
 	 */
 	"update:page": [page: number];
 	"update:pageSize": [size: number];
+	/**
+	 * The result bar asked for the table's exact row count. The grid only shows
+	 * the count, so the workspace owns the `COUNT(*)` and hands the answer back
+	 * through the `rowCount` prop.
+	 */
+	count: [];
 }>();
 
 const error = computed(() => props.result.error);
@@ -178,6 +194,21 @@ const rows = computed(() => props.result.rows);
  */
 const pageOffset = computed(() =>
 	props.page === undefined ? 0 : (props.page - 1) * props.pageSize,
+);
+
+/**
+ * Rows loaded so far, across pages: this page's rows plus every page before
+ * it. A query tab pages nothing, so its offset is zero and this is its length.
+ */
+const loadedRows = computed(() => pageOffset.value + rows.value.length);
+
+/**
+ * Whether more rows could exist past the loaded ones. A full page is the only
+ * evidence of a further page, and a backend cap that cut the page short is the
+ * same signal from the other direction.
+ */
+const mayHaveMoreRows = computed(
+	() => props.hasNextPage || props.result.truncated,
 );
 
 /**
@@ -2017,8 +2048,29 @@ function rowKey(_row: unknown, index: number): number {
 			     a multi-line statement cannot make the bar grow. -->
 			<div class="result-statusbar" data-slot="result-statusbar">
 				<div class="flex min-w-0 items-center gap-2 overflow-hidden">
-					<span class="shrink-0 tabular-nums">
+					<!-- A table tab's statement carries a `LIMIT`, so its row count is
+					     a floor, not a total: it reads `loaded/known` and, while more
+					     rows may exist, the `+` on the upper bound runs the one
+					     `COUNT(*)` that turns it into an exact total. A query tab's
+					     rows are the whole result, so its length is already the total. -->
+					<span v-if="page === undefined" class="shrink-0 tabular-nums">
 						{{ result.truncated ? "Loaded" : "Total" }} {{ rows.length }} rows
+					</span>
+					<span v-else class="flex shrink-0 items-baseline tabular-nums">
+						<span>{{ loadedRows }}/</span>
+						<span v-if="rowCount !== null">{{ rowCount.toLocaleString() }}</span>
+						<button
+							v-else-if="mayHaveMoreRows && !countBusy"
+							type="button"
+							class="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-foreground"
+							title="Count every row in the table"
+							@click="emit('count')"
+						>
+							{{ loadedRows }}+
+						</button>
+						<span v-else-if="countBusy" class="text-muted-foreground">…</span>
+						<span v-else>{{ loadedRows }}</span>
+						<span class="ml-1">rows</span>
 					</span>
 					<span class="shrink-0 tabular-nums">{{ formatMs(result.executionTimeMs) }}</span>
 					<span

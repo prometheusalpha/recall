@@ -11,6 +11,7 @@ import type {
 import type { Driver } from "./driver";
 import {
 	columnTypeName,
+	countTableRows,
 	driverFor,
 	normalizeBackendError,
 	probeStatementColumns,
@@ -398,6 +399,16 @@ export const handlers = {
 	async tableDdl({ connectionId, database, schema, table }: Params<"tableDdl">) {
 		const { db, config } = await getConnection(connectionId, database);
 		return driverFor(config.dbType).tableDdl(db, database, schema, table);
+	},
+
+	async countTable({
+		connectionId,
+		database,
+		schema,
+		table,
+	}: Params<"countTable">) {
+		const { db, config } = await getConnection(connectionId, database);
+		return countTableRows(db, driverFor(config.dbType), database, schema, table);
 	},
 
 	async updateCell({
