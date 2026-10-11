@@ -6,6 +6,7 @@ import type {
 	ConnectionConfig,
 	ConnectionTestResult,
 	ExecuteResult,
+	ExplainResult,
 	PinnedTable,
 	StatementResult,
 } from "../shared/types";
@@ -561,6 +562,23 @@ export const handlers = {
 				error instanceof Error ? error.message : error,
 			);
 			return false;
+		}
+	},
+
+	async explain({ connectionId, database, sql }: Params<"explain">) {
+		const { db, config } = await getConnection(connectionId, database);
+		try {
+			return {
+				plan: await driverFor(config.dbType).explain(db, sql),
+				error: null,
+			} satisfies ExplainResult;
+		} catch (error) {
+			// Errors are data here too: a statement the server will not plan is
+			// reported in the panel, not thrown across the transport.
+			return {
+				plan: null,
+				error: normalizeBackendError(error, sql),
+			} satisfies ExplainResult;
 		}
 	},
 	/**

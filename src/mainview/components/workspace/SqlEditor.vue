@@ -18,6 +18,7 @@ import {
 	Database,
 	PlayIcon,
 	SquareIcon,
+	WorkflowIcon,
 } from "lucide-vue-next";
 import { useConnectionsStore } from "../../stores/connections";
 import { useQueryStore } from "../../stores/query";
@@ -299,6 +300,18 @@ function formatFromShortcut(event: KeyboardEvent): boolean {
 	return true;
 }
 
+/** `editor.explainPlan` from the shortcut table, claimed here for the same
+ * reason the format chord is: the plan is of the statement under the caret, so
+ * the press only means anything while the editor holds focus. Claimed either
+ * way — the webview must not act on a chord the app has given a meaning to. */
+function explainFromShortcut(event: KeyboardEvent): boolean {
+	if (match(event) !== "editor.explainPlan") return false;
+	if (event.repeat) return true;
+	event.preventDefault();
+	void explain();
+	return true;
+}
+
 /**
  * The first line of a formatter failure.
  *
@@ -488,6 +501,41 @@ function stop(): void {
 function toggleRun(): void {
 	if (running.value) stop();
 	else run();
+}
+
+/**
+ * The statement an Explain should plan, narrowed the way a run is: the
+ * selection first, then the statement under the caret.
+ *
+ * The one difference is the fallback. A run falls back to the whole document,
+ * but a batch has no single plan, so the document is only used when it *is* one
+ * statement — which is what makes the caret sitting in the blank line after a
+ * lone query still explain that query.
+ */
+function explainTarget(): string | null {
+	const selected = editor?.selection().trim() ?? "";
+	if (selected !== "") return selected;
+	const statement = editor?.statementUnderCaret() ?? null;
+	if (statement !== null) return statement;
+	if (statementCount.value !== 1) return null;
+	const whole = activeTab.value?.sql.trim() ?? "";
+	return whole === "" ? null : whole;
+}
+
+/**
+ * Ask the backend for the plan of one statement. Nothing is executed: both
+ * engines answer `EXPLAIN` without running the body, so this is a safe thing to
+ * press on a statement that writes.
+ */
+async function explain(): Promise<void> {
+	const id = activeTabId.value;
+	if (id === null) return;
+	const sql = explainTarget();
+	if (sql === null) {
+		toast("Put the cursor inside a statement, or select one, to explain it.");
+		return;
+	}
+	await queryStore.explain(id, sql);
 }
 
 /**
@@ -1373,7 +1421,9 @@ async function mountEditor(): Promise<void> {
 				S.Prec.highest(
 					V.EditorView.domEventHandlers({
 						keydown: (event) =>
-							assignFromShortcut(event) || formatFromShortcut(event),
+							assignFromShortcut(event) ||
+							formatFromShortcut(event) ||
+							explainFromShortcut(event),
 					}),
 				),
 				S.Prec.highest(V.keymap.of(bookmarkBindings())),
@@ -1736,6 +1786,19 @@ watch(
 			<span class="text-[11px] text-muted-foreground">
 				{{ statementCount }} statement{{ statementCount === 1 ? "" : "s" }}
 			</span>
+
+			<!-- Which statement the plan is of is decided by the caret, so the
+			     button belongs on the row that owns the document, next to Run. -->
+			<Button
+				variant="ghost"
+				size="sm"
+				aria-label="Explain statement"
+				:disabled="!activeTabId || statementCount === 0"
+				@click="explain"
+			>
+				<WorkflowIcon aria-hidden="true" />
+				Explain
+			</Button>
 
 			<!-- Datasource: which connection and database this document runs
 			     against, and where that choice is changed. It sits on the right

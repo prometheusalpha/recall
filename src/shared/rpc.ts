@@ -7,6 +7,7 @@ import type {
 	DatabaseConnectionInfo,
 	DatabaseInfo,
 	ExecuteResult,
+	ExplainResult,
 	ForeignKeyInfo,
 	IndexInfo,
 	PinnedTable,
@@ -188,6 +189,16 @@ export type BunRequests = {
 	cancelQuery: {
 		params: { executionId: string };
 		response: boolean;
+	};
+	/**
+	 * The execution plan for one statement, estimated rather than measured:
+	 * both dialects answer without running the body, so explaining a write
+	 * cannot perform it. A rejected plan comes back as `error`, the way a
+	 * statement error does, because a plan request failing is not exceptional.
+	 */
+	explain: {
+		params: { connectionId: string; database: string; sql: string };
+		response: ExplainResult;
 	};
 	/** Native directory picker. Resolves null when the user cancels. */
 	pickFolder: {

@@ -12,6 +12,7 @@ Built on [Electrobun 2.0.2](https://blackboard.sh/electrobun/): a **Bun main pro
 - **Schema browser** — databases, schemas, tables, columns, foreign keys, triggers, indexes, per database.
 - **SQL editor** — CodeMirror 6 with dialect-aware highlighting, autocomplete, statement outlining, per-statement error reporting, and autosave.
 - **Smart run** — `Mod-Enter` runs, in order of narrowing: the run in flight → the selection → the statement under the caret → the whole document.
+- **Explain plan** — the button next to Run, or `Opt-Shift-E`, plans the statement under the caret without executing it; a zoomable node canvas with cost heat, an operator tree, and the server's own JSON.
 - **Result grid** — virtualized, sortable, filterable, resizable and reorderable columns, pinned row headers, cell selection with keyboard navigation, CSV export.
 - **SQL file management** — open folders of `.sql` files in the sidebar with rename, cut/copy/paste, delete, and optimistic-concurrency saves that refuse to clobber.
 - **Tabs & snippets** — persistent tab state and reusable SQL snippets.

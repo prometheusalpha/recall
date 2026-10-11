@@ -38,6 +38,7 @@ export type CommandId =
 	| "tab.prev"
 	| "quickOpen.toggle"
 	| "editor.formatSql"
+	| "editor.explainPlan"
 	| "result.sortAsc"
 	| "result.sortDesc"
 	| "result.rerun"
@@ -122,6 +123,18 @@ export const SHORTCUT_COMMANDS: CommandDefinition[] = [
 		label: "Format SQL",
 		group: "Editor",
 		defaultBinding: { key: "f", meta: false, ctrl: false, shift: true, alt: true },
+	},
+	/*
+	 * Option+Shift+E for the same two reasons Format SQL carries: the editor
+	 * has to own it, because the plan is of the statement under the caret, and
+	 * real Alt keeps the chord clear of the `Ctrl-Shift-<letter>` slots that
+	 * mnemonic assignment claims.
+	 */
+	{
+		id: "editor.explainPlan",
+		label: "Explain statement",
+		group: "Editor",
+		defaultBinding: { key: "e", meta: false, ctrl: false, shift: true, alt: true },
 	},
 	/*
 	 * Grid-owned chords: the two sorts (which spell out real Control on every

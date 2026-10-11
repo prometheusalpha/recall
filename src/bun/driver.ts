@@ -5,6 +5,7 @@ import type {
 	ConnectionConfig,
 	DatabaseConnectionInfo,
 	DatabaseType,
+	ExplainPlan,
 	ForeignKeyInfo,
 	IndexInfo,
 	TableInfo,
@@ -99,6 +100,16 @@ export interface Driver {
 		sql: string,
 		columns: string[],
 	): Promise<string[]>;
+	/**
+	 * The execution plan for one statement, as a normalised node tree.
+	 *
+	 * Estimate only, by design: both engines answer `EXPLAIN` without running
+	 * the statement, and `EXPLAIN ANALYZE` is deliberately not generated — it
+	 * executes the body, so asking for a plan of a `DELETE` would perform the
+	 * delete. The wrapper statement and the parse both live here, which keeps a
+	 * plan's shape a dialect fact instead of something the renderer branches on.
+	 */
+	explain(db: SQL, sql: string): Promise<ExplainPlan>;
 }
 
 export const DRIVERS: Record<DatabaseType, Driver> = {
@@ -153,6 +164,61 @@ export function urlParamsToRecord(raw: string): Record<string, string> {
 	const out: Record<string, string> = {};
 	for (const [key, value] of parseUrlParams(raw)) out[key] = value;
 	return out;
+}
+
+// ---------------------------------------------------------------------------
+// EXPLAIN plan reading — shared because both dialects answer with JSON, and the
+// two disagree only about whether it arrives decoded or as a JSON *string*.
+// ---------------------------------------------------------------------------
+
+/**
+ * Decode a plan body. Postgres hands the plan back already decoded; MySQL hands
+ * back the JSON text. Anything that is not JSON at all is returned untouched,
+ * which is what puts a plain-text plan in the viewer's raw pane.
+ */
+export function parsePlanJson(value: unknown): unknown {
+	if (typeof value !== "string") return value;
+	const text = value.trim();
+	if (!text) return value;
+	try {
+		return JSON.parse(text);
+	} catch {
+		return value;
+	}
+}
+
+/** A plan document is an object; anything else (array, scalar, null) is not one. */
+export function planObject(value: unknown): Record<string, unknown> | null {
+	return value !== null && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+/** Tree positions (`Plans`, `nested_loop`) are arrays; a missing one is null. */
+export function planArray(value: unknown): unknown[] | null {
+	return Array.isArray(value) ? value : null;
+}
+
+/**
+ * A plan field as display text. Engines spell the same field as a number, a
+ * string, or a boolean depending on the operator, and the viewer prints it, so
+ * the reading is uniform rather than per-field.
+ */
+export function planText(value: unknown): string | undefined {
+	if (typeof value === "string") return value;
+	if (typeof value === "number" || typeof value === "boolean") {
+		return String(value);
+	}
+	return undefined;
+}
+
+/**
+ * True when the statement is already an EXPLAIN, so it is sent as written.
+ * Nesting one inside another is a syntax error, and a hand-written
+ * `EXPLAIN (ANALYZE, FORMAT JSON) …` is a plan the user asked for explicitly.
+ */
+export function alreadyExplains(sql: string): boolean {
+	return /^\s*explain\b/i.test(sql);
 }
 
 // ---------------------------------------------------------------------------

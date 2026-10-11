@@ -3,13 +3,23 @@ import type {
 	ColumnInfo,
 	ConnectionConfig,
 	DatabaseConnectionInfo,
+	ExplainPlan,
+	ExplainPlanNode,
 	ForeignKeyInfo,
 	IndexInfo,
 	TableInfo,
 	TriggerInfo,
 } from "../../shared/types";
 import type { Driver, SQLOptions } from "../driver";
-import { normalizeBackendError, parseUrlParams } from "../driver";
+import {
+	alreadyExplains,
+	normalizeBackendError,
+	parsePlanJson,
+	parseUrlParams,
+	planArray,
+	planObject,
+	planText,
+} from "../driver";
 
 /**
  * `ConnectionConfig.urlParams` handling for MySQL: TLS flags map onto Bun.SQL
@@ -377,6 +387,19 @@ export const mysqlDriver: Driver = {
 	async columnTypes(): Promise<string[]> {
 		return [];
 	},
+
+	async explain(db: SQL, sql: string): Promise<ExplainPlan> {
+		const statement = alreadyExplains(sql)
+			? sql
+			: `EXPLAIN FORMAT=JSON ${sql}`;
+		const rows = (await db.unsafe(statement)) as Array<
+			Record<string, unknown>
+		>;
+		// MySQL answers with the plan as a JSON *string* in one column, where
+		// Postgres hands back an already decoded `json` column.
+		const raw = parsePlanJson(Object.values(rows[0] ?? {})[0]);
+		return { sql: statement, raw, nodes: parseMysqlPlan(raw) };
+	},
 };
 
 /**
@@ -445,4 +468,146 @@ function appendUrlParam(
 	const url = new URL(`mysql://${options.hostname ?? "localhost"}`);
 	url.search = params.toString();
 	options.url = url.toString();
+}
+
+/**
+ * The parsed plan, in the shape the viewer's `ExplainPlanNode` expects.
+ *
+ * MySQL answers in one of two documents and does not let the caller choose:
+ * the original `query_block` one, and the `query_plan` tree of `inputs` that
+ * newer servers emit for plans they can describe that way (`json_schema_version`
+ * is what tells them apart). Both are read, because which one arrives is the
+ * server's decision rather than a setting.
+ */
+function parseMysqlPlan(raw: unknown): ExplainPlanNode[] {
+	const root = planObject(raw);
+	if (root === null) return [];
+	const tree = planObject(root.query_plan);
+	if (tree !== null) return [parseMysqlPlanTree(tree, "0")];
+	return [parseMysqlBlock(planObject(root.query_block) ?? root, "0", "query_block")];
+}
+
+/**
+ * One node of the `query_plan` shape: either a step that wraps `inputs`, or a
+ * table access, which is the same record without them. `operation` is the
+ * server's own sentence for the step ("Nested loop inner join", "Sort: …"), so
+ * it is what the row is labelled with, while `access_type` stays the short
+ * word the badge and the canvas colour are chosen from.
+ */
+function parseMysqlPlanTree(
+	node: Record<string, unknown>,
+	id: string,
+): ExplainPlanNode {
+	const operation = planText(node.operation);
+	const accessType = planText(node.access_type);
+	const relation = planText(node.table_name);
+	const condition =
+		planText(node.attached_condition) ?? planText(node.lookup_condition);
+	const columns = planArray(node.used_columns)?.map(String).join(", ");
+	const sortFields = planArray(node.sort_fields)?.map(String).join(", ");
+	return {
+		id,
+		title:
+			operation ??
+			(relation ? `${accessType ?? "table"} on ${relation}` : accessType ?? "step"),
+		nodeType: accessType ?? operation ?? "step",
+		relation,
+		index: planText(node.index_name),
+		cost: planText(node.estimated_total_cost),
+		rows: planText(node.estimated_rows),
+		details: [
+			condition ? `Condition: ${condition}` : "",
+			columns ? `Columns: ${columns}` : "",
+			sortFields ? `Sort: ${sortFields}` : "",
+		].filter((detail) => detail !== ""),
+		children: (planArray(node.inputs) ?? [])
+			.map((input, index) =>
+				parseMysqlPlanTree(planObject(input) ?? {}, `${id}.${index}`),
+			),
+	};
+}
+
+function parseMysqlBlock(
+	block: Record<string, unknown>,
+	id: string,
+	nodeType: string,
+): ExplainPlanNode {
+	const children: ExplainPlanNode[] = [];
+
+	const table = planObject(block.table);
+	if (table !== null) children.push(parseMysqlTable(table, `${id}.0`));
+
+	for (const item of planArray(block.nested_loop) ?? []) {
+		const step = planObject(item);
+		if (step === null) continue;
+		const nestedTable = planObject(step.table);
+		children.push(
+			nestedTable !== null
+				? parseMysqlTable(nestedTable, `${id}.${children.length}`)
+				: parseMysqlBlock(step, `${id}.${children.length}`, "operation"),
+		);
+	}
+
+	// Each of these wraps the block it describes rather than being part of it,
+	// so it becomes a parent node instead of a detail on the node below.
+	for (const key of [
+		"ordering_operation",
+		"grouping_operation",
+		"duplicates_removal",
+		"union_result",
+		"materialized_from_subquery",
+	]) {
+		const child = planObject(block[key]);
+		if (child !== null) {
+			children.push(parseMysqlBlock(child, `${id}.${children.length}`, key));
+		}
+	}
+
+	const message = planText(block.message);
+	const selectId = planText(block.select_id);
+	return {
+		id,
+		title: nodeType,
+		nodeType,
+		cost: planText(planObject(block.cost_info)?.query_cost),
+		// A block reports no row estimate of its own; the tables underneath it
+		// do. `select_id` is an identifier, so it reads as a detail instead.
+		details: [
+			message ?? "",
+			selectId !== undefined ? `Select: ${selectId}` : "",
+		].filter((detail) => detail !== ""),
+		children,
+	};
+}
+
+/** One table access: the only MySQL node with a real row estimate. */
+function parseMysqlTable(
+	table: Record<string, unknown>,
+	id: string,
+): ExplainPlanNode {
+	const relation = planText(table.table_name);
+	const accessType = planText(table.access_type) ?? "table";
+	const costInfo = planObject(table.cost_info);
+	const condition = planText(table.attached_condition);
+	const columns = planArray(table.used_columns)?.map(String).join(", ");
+	return {
+		id,
+		title: relation ? `${accessType} on ${relation}` : accessType,
+		nodeType: accessType,
+		relation,
+		index: planText(table.key),
+		cost:
+			planText(costInfo?.query_cost) ??
+			planText(costInfo?.read_cost) ??
+			planText(costInfo?.eval_cost),
+		rows:
+			planText(table.rows_examined_per_scan) ??
+			planText(table.rows_produced_per_join),
+		details: [
+			condition ? `Condition: ${condition}` : "",
+			columns ? `Columns: ${columns}` : "",
+			table.using_index === true ? "Using index" : "",
+		].filter((detail) => detail !== ""),
+		children: [],
+	};
 }

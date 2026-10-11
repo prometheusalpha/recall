@@ -14,11 +14,14 @@ import "splitpanes/dist/splitpanes.css";
 import { FilePlus2Icon, RefreshCwIcon, TriangleAlertIcon } from "lucide-vue-next";
 import { useConnectionsStore } from "../../stores/connections";
 import { useQueryStore } from "../../stores/query";
+import type { ResultView } from "../../stores/query";
 import { useTabsStore } from "../../stores/tabs";
 import type { Tab } from "../../stores/tabs";
 import { toast } from "../../composables/useToast";
 import { errorMessage, RPC_TIMEOUTS, rpc } from "../../lib/rpc";
 import ResultGrid from "./ResultGrid.vue";
+import ResultViewTabs from "./ResultViewTabs.vue";
+import ExplainPlanViewer from "./ExplainPlanViewer.vue";
 import SqlEditor from "./SqlEditor.vue";
 import StatementBar from "./StatementBar.vue";
 import TabStrip from "./TabStrip.vue";
@@ -136,6 +139,17 @@ const activeStatementIndex = computed(() =>
 const activeResult = computed(
 	() => statements.value[activeStatementIndex.value] ?? statements.value[0] ?? null,
 );
+/** Which pane this tab is showing, and its last plan (null until it asked). */
+const resultView = computed(() =>
+	tabId.value ? (queryStore.resultViews[tabId.value] ?? "result") : "result",
+);
+const explainView = computed(() =>
+	tabId.value ? (queryStore.explainViews[tabId.value] ?? null) : null,
+);
+
+function setResultView(view: ResultView): void {
+	if (tabId.value) queryStore.setResultView(tabId.value, view);
+}
 
 const hasConnection = computed(
 	() => connectionsStore.activeId !== null || connectionsStore.configs.length > 0,
@@ -832,9 +846,26 @@ async function reconnectActive(): Promise<void> {
 				:max-size="MAX_RESULT_SIZE"
 				class="flex min-h-0 flex-col"
 			>
-				<StatementBar v-if="tabId" :tab-id="tabId" />
+				<!-- The switch owns the whole pane, so it sits above the statement
+				     pills: those pills only mean anything in the rows view. -->
+				<ResultViewTabs
+					v-if="tabId && explainView"
+					:view="resultView"
+					@update:view="setResultView"
+				/>
+				<StatementBar
+					v-if="tabId && resultView === 'result'"
+					:tab-id="tabId"
+				/>
+				<ExplainPlanViewer
+					v-if="resultView === 'explain' && explainView"
+					:plan="explainView.plan"
+					:error="explainView.error"
+					:loading="explainView.loading"
+					:sql="explainView.sql"
+				/>
 				<ResultGrid
-					v-if="activeResult"
+					v-else-if="activeResult"
 					:result="activeResult"
 					@reconnect="reconnectActive"
 				/>

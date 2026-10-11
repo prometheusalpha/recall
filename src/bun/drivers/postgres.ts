@@ -3,6 +3,8 @@ import type {
 	ColumnInfo,
 	ConnectionConfig,
 	DatabaseConnectionInfo,
+	ExplainPlan,
+	ExplainPlanNode,
 	ForeignKeyInfo,
 	IndexInfo,
 	TableInfo,
@@ -10,9 +12,14 @@ import type {
 } from "../../shared/types";
 import type { Driver, SQLOptions } from "../driver";
 import {
+	alreadyExplains,
 	isReadStatement,
 	normalizeBackendError,
+	parsePlanJson,
 	parseUrlParams,
+	planArray,
+	planObject,
+	planText,
 	wrapForColumnTypeProbePlanOnly,
 } from "../driver";
 
@@ -555,6 +562,19 @@ export const postgresDriver: Driver = {
 			return [];
 		}
 	},
+
+	async explain(db: SQL, sql: string): Promise<ExplainPlan> {
+		const statement = alreadyExplains(sql)
+			? sql
+			: `EXPLAIN (FORMAT JSON) ${sql}`;
+		const rows = (await db.unsafe(statement)) as Array<
+			Record<string, unknown>
+		>;
+		// The plan is one `json` column, which Bun hands over already decoded;
+		// `parsePlanJson` is what still reads an answer that came back as text.
+		const raw = parsePlanJson(Object.values(rows[0] ?? {})[0]);
+		return { sql: statement, raw, nodes: parsePostgresPlan(raw) };
+	},
 };
 
 /**
@@ -628,4 +648,87 @@ function commentStatements(
 		];
 	}
 	return [`COMMENT ON TABLE ${quoteIdent(name)} IS ${literal}`];
+}
+/**
+ * The parsed plan, in the shape the viewer's `ExplainPlanNode` expects.
+ *
+ * Postgres answers with one object per statement: the tree under `Plan`, and
+ * `Planning Time` / `Execution Time` beside it. Those two only appear for a
+ * plan that actually ran, which this app never asks for — but a hand-written
+ * `EXPLAIN ANALYZE` is sent through as written, so they are read when present.
+ */
+function parsePostgresPlan(raw: unknown): ExplainPlanNode[] {
+	const entries = Array.isArray(raw) ? raw : [raw];
+	const nodes: ExplainPlanNode[] = [];
+	entries.forEach((entry, index) => {
+		const root = planObject(entry);
+		if (root === null) return;
+		const node = parsePostgresNode(planObject(root.Plan) ?? root, String(index));
+		if (node === null) return;
+		for (const [label, value] of [
+			["Planning Time", root["Planning Time"]],
+			["Execution Time", root["Execution Time"]],
+		] as const) {
+			const text = planText(value);
+			if (text !== undefined) node.details.push(`${label}: ${text} ms`);
+		}
+		nodes.push(node);
+	});
+	return nodes;
+}
+
+/**
+ * One plan node. Everything is optional but the operator: a `Seq Scan` reports
+ * a relation, an `Aggregate` does not, and a cost is absent on operators that
+ * have none to report.
+ */
+function parsePostgresNode(
+	plan: Record<string, unknown> | null,
+	id: string,
+): ExplainPlanNode | null {
+	if (plan === null) return null;
+	const nodeType = planText(plan["Node Type"]) ?? "Plan";
+	const relation = planText(plan["Relation Name"]);
+	const startupCost = planText(plan["Startup Cost"]);
+	const totalCost = planText(plan["Total Cost"]);
+	const joinType = planText(plan["Join Type"]);
+	const filter = planText(plan.Filter);
+	const sortKey = planArray(plan["Sort Key"])?.map(String).join(", ");
+	// Absent unless the plan ran, which only a hand-written ANALYZE produces.
+	// `Actual Rows` is per loop, so it pairs with `Plan Rows`, not with a total.
+	const actualRows = planText(plan["Actual Rows"]);
+	const actualLoops = planText(plan["Actual Loops"]);
+	const actualStartup = planText(plan["Actual Startup Time"]);
+	const actualTotal = planText(plan["Actual Total Time"]);
+
+	return {
+		id,
+		title: relation ? `${nodeType} on ${relation}` : nodeType,
+		nodeType,
+		relation,
+		index: planText(plan["Index Name"]),
+		cost:
+			startupCost !== undefined && totalCost !== undefined
+				? `${startupCost}..${totalCost}`
+				: totalCost,
+		rows: planText(plan["Plan Rows"]),
+		width: planText(plan["Plan Width"]),
+		details: [
+			joinType ? `Join: ${joinType}` : "",
+			filter ? `Filter: ${filter}` : "",
+			sortKey ? `Sort: ${sortKey}` : "",
+			actualRows !== undefined ? `Actual Rows: ${actualRows}` : "",
+			actualLoops !== undefined && Number(actualLoops) > 1
+				? `Actual Loops: ${actualLoops}`
+				: "",
+			actualStartup !== undefined && actualTotal !== undefined
+				? `Actual Time: ${actualStartup}..${actualTotal} ms`
+				: "",
+		].filter((detail) => detail !== ""),
+		children: (planArray(plan.Plans) ?? [])
+			.map((child, childIndex) =>
+				parsePostgresNode(planObject(child), `${id}.${childIndex}`),
+			)
+			.filter((child): child is ExplainPlanNode => child !== null),
+	};
 }

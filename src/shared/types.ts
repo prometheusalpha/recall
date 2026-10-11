@@ -157,6 +157,48 @@ export interface ExecuteResult {
 }
 
 /**
+ * One node of an execution plan, in the shape both dialects are normalised to.
+ *
+ * Engines disagree about names and about which numbers they report, so this is
+ * the union of what Postgres and MySQL say: everything past the first three is
+ * optional. Costs and row estimates stay *text* — Postgres reports a cost as
+ * `startup..total`, and a single number here would have to round one end of
+ * that range on its way through JSON.
+ */
+export interface ExplainPlanNode {
+	id: string;
+	/** Label for the node, e.g. `Seq Scan on users`. */
+	title: string;
+	/** The bare operator, e.g. `Seq Scan` or `eq_ref`; what decides its colour. */
+	nodeType: string;
+	relation?: string;
+	index?: string;
+	cost?: string;
+	rows?: string;
+	width?: string;
+	details: string[];
+	children: ExplainPlanNode[];
+}
+
+/** One statement's plan, already normalised by the driver that produced it. */
+export interface ExplainPlan {
+	/** The statement that was sent, so the panel can show what it asked for. */
+	sql: string;
+	/** The server's own answer — shown verbatim in the panel's raw view. */
+	raw: unknown;
+	nodes: ExplainPlanNode[];
+}
+
+/**
+ * The answer to an EXPLAIN. A rejected plan is data, like every other database
+ * error here, so the server's reason is shown where the plan would be.
+ */
+export interface ExplainResult {
+	plan: ExplainPlan | null;
+	error: BackendError | null;
+}
+
+/**
  * One table pinned in the sidebar, addressed by the coordinates the tree uses.
  */
 export interface PinnedTable {

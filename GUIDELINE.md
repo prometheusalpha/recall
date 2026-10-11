@@ -52,7 +52,7 @@ proxy** declared in `src/shared/rpc.ts`:
 | `src/bun/` | `handlers.ts`, `rpc.ts`, `connectionPool.ts`, `driver.ts`, `appDb.ts`, `connectionStore.ts`, `bookmarkStore.ts`, `credentialStore.ts`, `sqlFiles.ts`, `menu.ts`, `index.ts` |
 | `src/mainview/stores/` | 6 Pinia setup stores: `connections`, `tabs`, `query`, `sqlFiles`, `bookmarks`, `snippets` |
 | `src/mainview/composables/` | `useQuickOpen`, `useGridSelection`, `useToast`, `useTheme`, `useUiScale`, `usePanelResize`, `useFlatTree` |
-| `src/mainview/lib/` | `rpc.ts` (proxy), `sqlSplit.ts`, `sqlDialect.ts`, `fuzzy.ts`, `cn.ts`, `fileDatasource.ts`, `connectionDefaults.ts` |
+| `src/mainview/lib/` | `rpc.ts` (proxy), `sqlSplit.ts`, `sqlDialect.ts`, `fuzzy.ts`, `cn.ts`, `fileDatasource.ts`, `connectionDefaults.ts`, `explainCanvas.ts` |
 | `src/mainview/components/` | `layout/`, `workspace/`, `sidebar/`, `files/`, `dialogs/`, `quickopen/`, `editor/`, `ui/` (shadcn-vue primitives) |
 
 State lives in **three** places, deliberately:
