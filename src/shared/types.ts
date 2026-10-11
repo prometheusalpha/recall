@@ -156,5 +156,16 @@ export interface ExecuteResult {
 	totalExecutionTimeMs: number;
 }
 
+/**
+ * One table pinned in the sidebar, addressed by the coordinates the tree uses.
+ */
+export interface PinnedTable {
+	connectionId: string;
+	database: string;
+	/** For MySQL this repeats `database`: it has no schema level below it. */
+	schema: string;
+	table: string;
+}
+
 /** Keys are connection ids. Values are the persisted configs, by id. */
 export type ConnectionMap = Record<string, ConnectionConfig>;

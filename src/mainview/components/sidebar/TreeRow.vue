@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { ChevronRight, Loader } from "lucide-vue-next";
+import { ChevronRight, Loader, Pin } from "lucide-vue-next";
 import type { Component } from "vue";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
@@ -57,8 +57,13 @@ const props = withDefaults(
 		 * only the row kinds that actually have a menu suppress the browser's.
 		 */
 		contextable?: boolean;
+		/**
+		 * Whether this table is pinned. A pinned row leads its sibling list, so
+		 * the glyph is what explains the position it did not ask for.
+		 */
+		pinned?: boolean;
 	}>(),
-	{ selected: false, loading: false, contextable: false },
+	{ selected: false, loading: false, contextable: false, pinned: false },
 );
 
 /**
@@ -160,6 +165,12 @@ function onContextMenu(event: MouseEvent): void {
 		>
 			{{ childCount }}
 		</span>
+
+		<Pin
+			v-if="pinned"
+			class="size-3 shrink-0 text-primary"
+			aria-label="Pinned"
+		/>
 
 		<!-- `leading-none` and no block padding keep the pill inside the fixed
 		     28px row, so the virtual scroller's arithmetic still holds. -->

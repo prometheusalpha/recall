@@ -18,13 +18,14 @@ import {
 	ChevronLeft,
 	ChevronRight,
 	ChevronsLeft,
+	ClipboardCopy,
 	Download,
 	RefreshCw,
 	TriangleAlertIcon,
 } from "lucide-vue-next";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
-import type { StatementResult } from "../../../shared/types";
+import type { DatabaseType, StatementResult } from "../../../shared/types";
 import {
 	autoColumnWidth,
 	GRID_CHAR_WIDTH,
@@ -33,6 +34,7 @@ import {
 } from "../../lib/gridColumnWidth";
 import { sumCells, type SumCell } from "../../lib/cellSum";
 import { formatCellValue } from "../../lib/formatCell";
+import { buildInsertStatement } from "../../lib/sqlInsert";
 import {
 	columnTypeClass,
 	resolveColumnVisualKind,
@@ -98,6 +100,18 @@ const props = withDefaults(
 			/** Primary key columns, needed to address a row for UPDATE. */
 			keyColumns: string[];
 		} | null;
+		/**
+		 * The table this result came from, for row-INSERT generation. Separate
+		 * from `editable` because inserting a row needs no primary key, and
+		 * `editable` is null for a table without one.
+		 */
+		insertTarget?: {
+			connectionId: string;
+			database: string;
+			schema: string;
+			table: string;
+			dbType: DatabaseType;
+		} | null;
 		busy?: boolean;
 		/** Raw WHERE expression shown in the filter band. */
 		where?: string;
@@ -134,6 +148,7 @@ const props = withDefaults(
 	{
 		columnWidth: DEFAULT_COLUMN_WIDTH,
 		editable: null,
+		insertTarget: null,
 		busy: false,
 		where: "",
 		orderBy: "",
@@ -744,6 +759,12 @@ const menuColumn = ref<string | null>(null);
  * open so each item's disabled state is read at the moment the menu is raised.
  */
 const menuItems = ref<ContextMenuItem[]>([]);
+/**
+ * Items for the body's own menu host. Rebuilt on every open, same as the
+ * header's, so the item's disabled state reflects whether this result knows a
+ * table at the moment the menu is raised.
+ */
+const rowMenuItems = ref<ContextMenuItem[]>([]);
 
 function openHeaderMenu(
 	column: string,
@@ -1361,6 +1382,57 @@ function onRowNumberClick(row: number, event: MouseEvent): void {
 }
 
 /**
+ * The right-click menu on a row number. It selects the row the same way the
+ * gutter's click does, so the menu acts on a row that is visibly selected and
+ * the user can see which one a copy is about to describe.
+ */
+function onRowNumberContextMenu(
+	row: number,
+	event: MouseEvent,
+	openMenu: (event: MouseEvent, items?: ContextMenuItem[]) => void,
+): void {
+	const last = columns.value.length - 1;
+	if (last >= 0) {
+		selection.selectCell({ row, col: 0 });
+		selection.extendSelectionTo({ row, col: last });
+	}
+	rowMenuItems.value = [
+		{
+			label: "Copy as INSERT",
+			icon: ClipboardCopy,
+			disabled: props.insertTarget === null,
+			action: () => void copyRowAsInsert(row),
+		},
+	];
+	openMenu(event, rowMenuItems.value);
+}
+
+/**
+ * The whole row comes from `props.result`, not from the visible columns: a
+ * hidden column still has a value, and omitting it from the INSERT would
+ * silently write a different row.
+ */
+async function copyRowAsInsert(row: number): Promise<void> {
+	const target = props.insertTarget;
+	if (!target) return;
+	const sql = buildInsertStatement({
+		dbType: target.dbType,
+		database: target.database,
+		schema: target.schema,
+		table: target.table,
+		columns: props.result.columns,
+		columnTypes: props.result.columnTypes,
+		row: props.result.rows[row] ?? [],
+	});
+	try {
+		await navigator.clipboard.writeText(sql);
+		toast("INSERT statement copied");
+	} catch (err) {
+		toast(errorMessage(err));
+	}
+}
+
+/**
  * A header click only ever *selects*: a plain click collapses the selection
  * onto the column, a shift-click extends from the existing anchor. Sorting
  * moved to the context menu — a click that re-runs the statement is one the
@@ -1944,126 +2016,134 @@ function rowKey(_row: unknown, index: number): number {
 			</div>
 		</CustomContextMenu>
 
-		<!-- `RecycleScroller` is the scroller, so the keyboard, focus and ARIA
-		     wiring has to land on it rather than on a wrapper that never
-		     scrolls. Its width is the pane's width, which is what pins its
-		     scrollbar to the pane's right edge. -->
-		<RecycleScroller
-			ref="recycleRef"
-			class="grid-body recall-scroll min-h-0 flex-1 outline-none"
-			:style="{ '--grid-content-width': `${totalWidth}px` }"
-			:items="rows"
-			:key-field="rowKey"
-			:item-size="ROW_HEIGHT"
-			:buffer="600"
-			:disable-transform="true"
-			:skip-hover="true"
-			role="rowgroup"
-			:aria-rowcount="rows.length"
-			:aria-colcount="columns.length + 1"
-			aria-label="Query results"
-			tabindex="0"
-			:aria-activedescendant="selection.focus.value ? `cell-${selection.focus.value.row}-${selection.focus.value.col}` : undefined"
-			@click="gridFocused = true"
-			@focus="gridFocused = true"
-			@blur="gridFocused = false"
-			@scroll="onBodyScroll"
-			@keydown="onKeydown"
-		>
-				<template #default="{ item, index }">
-					<div class="grid-row flex" role="row" :style="rowStyle">
-						<Tooltip>
-							<TooltipTrigger as-child>
-								<div
-									class="grid-cell grid-row-number"
-									role="cell"
-									:style="rowNumberStyle"
-									:data-selected="rowIsSelected(index)"
-									@click="onRowNumberClick(index, $event)"
-								>
-									{{ rowNumberLabel(index) }}
-								</div>
-							</TooltipTrigger>
-							<!-- One tooltip per RENDERED row, which is what the virtualiser
-							     already bounds: the scroller pools its views, so scrolling
-							     re-patches this text rather than mounting anything. It is
-							     deliberately not the one shared popper the header menu uses —
-							     a menu has to follow a click, whereas a tooltip would have to
-							     open before the provider's delay to look right. Both the cell
-							     and this quote `rowNumberLabel`, so a recycled view cannot pair
-							     one row's cell with another row's number. -->
-							<TooltipContent class="max-w-lg">{{ rowNumberLabel(index) }}</TooltipContent>
-						</Tooltip>
-						<!-- Hover is reported here rather than left to the
-						     primitive's own trigger: the tooltip that answers is
-						     one parked instance, and this is where the row/col it
-						     re-reads comes from. -->
-						<div
-							v-for="(column, columnIndex) in columns"
-							:key="column"
-							:id="`cell-${index}-${columnIndex}`"
-							class="grid-cell"
-							role="cell"
-							:style="cellStyleFor(column)"
-							:data-row="index"
-							:data-col="columnIndex"
-							:data-null="isNullAt(index, columnIndexes[columnIndex] ?? 0)"
-							:data-selected="selection.isSelected(index, columnIndex)"
-							:data-active="selection.isActive(index, columnIndex)"
-							@click="onCellClick(index, columnIndex, $event)"
-							@pointerdown="onCellPointerDown(index, columnIndex, $event)"
-							@dblclick="startEdit(index, columnIndex)"
-						>
-							<!-- The editor replaces the text in place so the row
-							     never shifts and the surrounding selection stays visible. -->
-							<input
-								v-if="editing?.row === index && editing?.col === columnIndex"
-								ref="editorEl"
-								v-model="editing.draft"
-								class="grid-cell-editor"
-								@keydown.enter.prevent="commitEdit()"
-								@keydown.tab.prevent="commitEdit({ row: index, col: columnIndex + 1 })"
-								@keydown.esc.prevent="cancelEdit"
-								@blur="commitEdit()"
-							>
-							<span
-								v-else
-								class="truncate"
-								:class="cellTypeClass(index, columnIndex)"
-							>{{
-								cellDisplayValue(
-									cellAt(item, columnIndexes[columnIndex] ?? 0),
-									columnIndexes[columnIndex] ?? 0,
-								)
-							}}</span>
-						</div>
-					</div>
-				</template>
-				<template #empty>
-					<div class="px-3 py-6 text-center text-xs text-muted-foreground">
-						No rows
-					</div>
-				</template>
-			</RecycleScroller>
-			<!-- The focused cell's value in full, over the cells to its right.
-			     The layer is clipped to the body's viewport and starts right of
-			     the pinned gutter, so the box can never reach the header, the
-			     status bar, the scrollbar or the gutter; `pointer-events-none`
-			     keeps every click and drag reaching the cells underneath. -->
-			<div
-				v-if="peekStyle"
-				class="grid-cell-peek-layer"
-				:style="peekLayerStyle"
-				aria-hidden="true"
+		<!-- A second host for the body, mirroring the header's above: the
+		     row-number gutter is rendered inside the virtualised scroller, so a
+		     per-cell menu would be recycled out from under it. Like the header's,
+		     this host renders no wrapper element, so the scroller keeps its
+		     `min-h-0 flex-1` sizing against the pane. -->
+		<CustomContextMenu :items="rowMenuItems" v-slot="bodyMenuSlot">
+			<!-- `RecycleScroller` is the scroller, so the keyboard, focus and ARIA
+			     wiring has to land on it rather than on a wrapper that never
+			     scrolls. Its width is the pane's width, which is what pins its
+			     scrollbar to the pane's right edge. -->
+			<RecycleScroller
+				ref="recycleRef"
+				class="grid-body recall-scroll min-h-0 flex-1 outline-none"
+				:style="{ '--grid-content-width': `${totalWidth}px` }"
+				:items="rows"
+				:key-field="rowKey"
+				:item-size="ROW_HEIGHT"
+				:buffer="600"
+				:disable-transform="true"
+				:skip-hover="true"
+				role="rowgroup"
+				:aria-rowcount="rows.length"
+				:aria-colcount="columns.length + 1"
+				aria-label="Query results"
+				tabindex="0"
+				:aria-activedescendant="selection.focus.value ? `cell-${selection.focus.value.row}-${selection.focus.value.col}` : undefined"
+				@click="gridFocused = true"
+				@focus="gridFocused = true"
+				@blur="gridFocused = false"
+				@scroll="onBodyScroll"
+				@keydown="onKeydown"
 			>
+					<template #default="{ item, index }">
+						<div class="grid-row flex" role="row" :style="rowStyle">
+							<Tooltip>
+								<TooltipTrigger as-child>
+									<div
+										class="grid-cell grid-row-number"
+										role="cell"
+										:style="rowNumberStyle"
+										:data-selected="rowIsSelected(index)"
+										@click="onRowNumberClick(index, $event)"
+										@contextmenu="onRowNumberContextMenu(index, $event, bodyMenuSlot.onContextMenu)"
+									>
+										{{ rowNumberLabel(index) }}
+									</div>
+								</TooltipTrigger>
+								<!-- One tooltip per RENDERED row, which is what the virtualiser
+								     already bounds: the scroller pools its views, so scrolling
+								     re-patches this text rather than mounting anything. It is
+								     deliberately not the one shared popper the header menu uses —
+								     a menu has to follow a click, whereas a tooltip would have to
+								     open before the provider's delay to look right. Both the cell
+								     and this quote `rowNumberLabel`, so a recycled view cannot pair
+								     one row's cell with another row's number. -->
+								<TooltipContent class="max-w-lg">{{ rowNumberLabel(index) }}</TooltipContent>
+							</Tooltip>
+							<!-- Hover is reported here rather than left to the
+							     primitive's own trigger: the tooltip that answers is
+							     one parked instance, and this is where the row/col it
+							     re-reads comes from. -->
+							<div
+								v-for="(column, columnIndex) in columns"
+								:key="column"
+								:id="`cell-${index}-${columnIndex}`"
+								class="grid-cell"
+								role="cell"
+								:style="cellStyleFor(column)"
+								:data-row="index"
+								:data-col="columnIndex"
+								:data-null="isNullAt(index, columnIndexes[columnIndex] ?? 0)"
+								:data-selected="selection.isSelected(index, columnIndex)"
+								:data-active="selection.isActive(index, columnIndex)"
+								@click="onCellClick(index, columnIndex, $event)"
+								@pointerdown="onCellPointerDown(index, columnIndex, $event)"
+								@dblclick="startEdit(index, columnIndex)"
+							>
+								<!-- The editor replaces the text in place so the row
+								     never shifts and the surrounding selection stays visible. -->
+								<input
+									v-if="editing?.row === index && editing?.col === columnIndex"
+									ref="editorEl"
+									v-model="editing.draft"
+									class="grid-cell-editor"
+									@keydown.enter.prevent="commitEdit()"
+									@keydown.tab.prevent="commitEdit({ row: index, col: columnIndex + 1 })"
+									@keydown.esc.prevent="cancelEdit"
+									@blur="commitEdit()"
+								>
+								<span
+									v-else
+									class="truncate"
+									:class="cellTypeClass(index, columnIndex)"
+								>{{
+									cellDisplayValue(
+										cellAt(item, columnIndexes[columnIndex] ?? 0),
+										columnIndexes[columnIndex] ?? 0,
+									)
+								}}</span>
+							</div>
+						</div>
+					</template>
+					<template #empty>
+						<div class="px-3 py-6 text-center text-xs text-muted-foreground">
+							No rows
+						</div>
+					</template>
+				</RecycleScroller>
+				<!-- The focused cell's value in full, over the cells to its right.
+				     The layer is clipped to the body's viewport and starts right of
+				     the pinned gutter, so the box can never reach the header, the
+				     status bar, the scrollbar or the gutter; `pointer-events-none`
+				     keeps every click and drag reaching the cells underneath. -->
 				<div
-					class="grid-cell grid-cell-peek"
-					:style="peekStyle"
-					:data-null="peekIsNull"
+					v-if="peekStyle"
+					class="grid-cell-peek-layer"
+					:style="peekLayerStyle"
+					aria-hidden="true"
 				>
-					<span class="truncate" :class="peekTypeClass">{{ peekText }}</span>
+					<div
+						class="grid-cell grid-cell-peek"
+						:style="peekStyle"
+						:data-null="peekIsNull"
+					>
+						<span class="truncate" :class="peekTypeClass">{{ peekText }}</span>
+					</div>
 				</div>
-			</div>
+		</CustomContextMenu>
 
 			<!-- One row, three zones, exactly as DBX lays it out: what came back
 			     and how long it took, the statement that produced it, then the

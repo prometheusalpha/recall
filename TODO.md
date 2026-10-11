@@ -86,9 +86,14 @@ Phase 14:
 
 Phase 15:
 - Highlight màu text cột theo kiểu dữ liệu
-- Auto limit trong sql editor 
 - Suggest field trong editor
 - Nới đôi thanh WHERE / ORDER BY, thêm Cmd+L để focus vào input WHERE
+
+Phase 16:
+- Pin table trong sidebar
+- Generate sql row insert, trong context menu khi chuột phải vào row number 
+- Generate table ddl sidebar context menu
+- Cancel connect dial sidebar context menu
 
 Sau:
 - Màn loading 

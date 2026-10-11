@@ -9,6 +9,7 @@ import type {
 	ExecuteResult,
 	ForeignKeyInfo,
 	IndexInfo,
+	PinnedTable,
 	TableInfo,
 	TriggerInfo,
 } from "./types";
@@ -281,6 +282,27 @@ export type BunRequests = {
 	resolveBookmark: {
 		params: { mnemonic: string; text: string };
 		response: Bookmark | null;
+	};
+	/**
+	 * Every pinned table, in pin order: the first pinned table first.
+	 */
+	listPinnedTables: {
+		params: Record<string, never>;
+		response: PinnedTable[];
+	};
+	/**
+	 * Pin or unpin one table. Responds with the whole list, so the sidebar
+	 * replaces its state rather than trying to patch it.
+	 */
+	setPinnedTable: {
+		params: {
+			connectionId: string;
+			database: string;
+			schema: string;
+			table: string;
+			pinned: boolean;
+		};
+		response: PinnedTable[];
 	};
 	/** Show a file in Finder / Explorer. */
 	revealInFolder: {

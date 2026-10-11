@@ -614,6 +614,27 @@ const editableTarget = computed(() => {
 	};
 });
 
+/**
+ * The table this tab shows, for row-INSERT generation. Deliberately not
+ * `editableTarget`: inserting a row needs no primary key, so a keyless table
+ * can still copy a row as INSERT where it cannot be edited.
+ */
+const insertTarget = computed(() => {
+	const tab = activeTab.value;
+	if (!tab || tab.mode !== "table") return null;
+	const dbType = connectionsStore.configs.find(
+		(entry) => entry.id === tab.connectionId,
+	)?.dbType;
+	if (!dbType) return null;
+	return {
+		connectionId: tab.connectionId,
+		database: tab.database,
+		schema: tab.schema,
+		table: tab.table,
+		dbType,
+	};
+});
+
 /** CSV quoting is per RFC 4180: quote when the value holds a delimiter, quote
  *  or newline, and double any embedded quote. */
 function csvCell(value: unknown): string {
@@ -722,6 +743,7 @@ async function reconnectActive(): Promise<void> {
 					v-if="tableResult"
 					:result="tableResult"
 					:editable="editableTarget"
+					:insert-target="insertTarget"
 					:busy="isRunning"
 					:filterable="isTableTab"
 					:hidden-columns="activeHiddenColumns"

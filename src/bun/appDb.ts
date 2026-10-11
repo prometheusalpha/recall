@@ -54,6 +54,22 @@ CREATE TABLE IF NOT EXISTS bookmarks (
 	line_hash TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bookmarks_path ON bookmarks(path);
+
+/*
+ * One row per pinned table. The composite key is the (connection, database,
+ * schema, table) path the sidebar tree navigates by, so pinning the same table
+ * twice is the same key twice and collapses to one row. \`position\` is the
+ * order pins were added and is what the sidebar renders.
+ */
+CREATE TABLE IF NOT EXISTS pinned_tables (
+	connection_id TEXT NOT NULL,
+	database TEXT NOT NULL,
+	schema TEXT NOT NULL,
+	table_name TEXT NOT NULL,
+	position INTEGER NOT NULL,
+	PRIMARY KEY (connection_id, database, schema, table_name)
+);
+CREATE INDEX IF NOT EXISTS pinned_tables_position ON pinned_tables(position);
 `;
 
 let db: Database | null = null;

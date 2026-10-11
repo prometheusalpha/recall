@@ -118,6 +118,25 @@ function toProfiles(configs: ConnectionConfig[]): ConnectionProfile[] {
 }
 
 /**
+ * One in-flight `connect`. The token is what makes a cancel race-safe: the
+ * connect that is still awaited when the user cancels no longer owns the
+ * profile's state, and its late result is dropped instead of resurrecting a
+ * session the user just cancelled.
+ */
+interface ConnectAttempt {
+	cancelled: boolean;
+}
+const currentAttempt = new Map<string, ConnectAttempt>();
+
+/** Message every cancelled connect rejects with, so callers can stay quiet. */
+export const CONNECTION_CANCELLED = "Connection attempt was cancelled.";
+
+/** True when `err` is the routine rejection of a cancelled connect. */
+export function isConnectionCancelled(err: unknown): boolean {
+	return errorMessage(err) === CONNECTION_CANCELLED;
+}
+
+/**
  * Connection profiles plus live connection state.
  *
  * Profiles live in SQLite, in the Bun process (`src/bun/connectionStore.ts`);
@@ -341,25 +360,84 @@ export const useConnectionsStore = defineStore("connections", () => {
 	 * `password` is the one the form is holding right now. It is passed through
 	 * unchanged, so a profile with `savePassword: false` — whose cache entry was
 	 * dropped on save — still connects with what the user typed this session.
+	 *
+	 * Ownership rule: only the *current*, uncancelled attempt may write
+	 * `connected`. A connect the user cancelled — or one a later connect
+	 * superseded — drops its result and, when it is the cancelled current
+	 * attempt, closes the session the backend just opened for it.
 	 */
 	async function connect(
 		id: string,
 		password?: string,
 	): Promise<DatabaseConnectionInfo> {
 		const config = configFor(id, password);
+		const attempt: ConnectAttempt = { cancelled: false };
+		currentAttempt.set(id, attempt);
 		status.value[id] = "connecting";
 		try {
 			const result = await rpc.request.connect(
 				{ config },
 				{ maxRequestTime: RPC_TIMEOUTS.metadata },
 			);
+			if (attempt.cancelled && currentAttempt.get(id) === attempt) {
+				try {
+					await rpc.request.disconnect(
+						{ connectionId: id },
+						{ maxRequestTime: RPC_TIMEOUTS.metadata },
+					);
+				} catch {
+					// The session may not have reached the pool before the
+					// cancel; there is nothing else to do about it here.
+				}
+				status.value[id] = "disconnected";
+				delete databaseInfo.value[id];
+				if (activeId.value === id) activeId.value = null;
+				throw new Error(CONNECTION_CANCELLED);
+			}
+			if (currentAttempt.get(id) !== attempt) {
+				// A newer connect owns the pooled session — `openConnection`
+				// replaces same-key sessions, so this one must not touch it.
+				throw new Error(CONNECTION_CANCELLED);
+			}
 			databaseInfo.value[id] = result.databaseInfo;
 			status.value[id] = "connected";
 			activeId.value = id;
 			return result.databaseInfo;
 		} catch (err) {
+			if (attempt.cancelled || currentAttempt.get(id) !== attempt) {
+				if (currentAttempt.get(id) === attempt) {
+					status.value[id] = "disconnected";
+				}
+				throw new Error(CONNECTION_CANCELLED);
+			}
 			status.value[id] = "error";
 			throw new Error(errorMessage(err));
+		} finally {
+			if (currentAttempt.get(id) === attempt) currentAttempt.delete(id);
+		}
+	}
+
+	/**
+	 * Stops a connect the user cancelled. The spinner and every piece of local
+	 * state stop immediately; the backend session is closed now when it already
+	 * exists and by the awaiting connect when it is still opening, because
+	 * Bun.SQL offers no abort for a handshake in progress.
+	 */
+	async function cancelConnect(id: string): Promise<void> {
+		const attempt = currentAttempt.get(id);
+		if (!attempt) return;
+		attempt.cancelled = true;
+		status.value[id] = "disconnected";
+		delete databaseInfo.value[id];
+		if (activeId.value === id) activeId.value = null;
+		try {
+			await rpc.request.disconnect(
+				{ connectionId: id },
+				{ maxRequestTime: RPC_TIMEOUTS.metadata },
+			);
+		} catch {
+			// Idempotent: a no-op when nothing is open yet, and the resolve
+			// path closes a session that lands after this call.
 		}
 	}
 
@@ -369,6 +447,10 @@ export const useConnectionsStore = defineStore("connections", () => {
 	 * restarting one use `disconnect`, which is this plus the tab sweep.
 	 */
 	async function closeSession(id: string): Promise<void> {
+		// A manual disconnect during a connect must not be undone by that
+		// connect's late resolve, so the attempt loses ownership here.
+		const attempt = currentAttempt.get(id);
+		if (attempt) attempt.cancelled = true;
 		try {
 			await rpc.request.disconnect(
 				{ connectionId: id },
@@ -591,6 +673,7 @@ export const useConnectionsStore = defineStore("connections", () => {
 		update,
 		remove,
 		connect,
+		cancelConnect,
 		disconnect,
 		reconnect,
 		markLost,

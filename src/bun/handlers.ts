@@ -6,6 +6,7 @@ import type {
 	ConnectionConfig,
 	ConnectionTestResult,
 	ExecuteResult,
+	PinnedTable,
 	StatementResult,
 } from "../shared/types";
 import type { Driver } from "./driver";
@@ -46,6 +47,10 @@ import {
 	resolveBookmark as resolveStoredBookmark,
 	saveBookmark as saveStoredBookmark,
 } from "./bookmarkStore";
+import {
+	listPinnedTables as listStoredPinnedTables,
+	setPinnedTable as setStoredPinnedTable,
+} from "./pinStore";
 type Params<K extends keyof BunRequests> = BunRequests[K]["params"];
 
 /** Re-exported so `rpc.ts` can forward the push without importing the pool. */
@@ -304,6 +309,23 @@ export const handlers = {
 		text,
 	}: Params<"resolveBookmark">): Bookmark | null {
 		return resolveStoredBookmark(mnemonic, text);
+	},
+	/**
+	 * Sidebar pins. As with bookmarks these are thin: `./pinStore` owns the
+	 * table, the ordering and the "already pinned" case, and hands back the
+	 * whole list so the renderer never has to patch its own copy.
+	 */
+	listPinnedTables(): PinnedTable[] {
+		return listStoredPinnedTables();
+	},
+	setPinnedTable({
+		connectionId,
+		database,
+		schema,
+		table,
+		pinned,
+	}: Params<"setPinnedTable">): PinnedTable[] {
+		return setStoredPinnedTable({ connectionId, database, schema, table, pinned });
 	},
 
 	async connect({ config }: Params<"connect">) {

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, defineComponent, h, ref, watch } from "vue";
+import { computed, defineComponent, h, onMounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
-import { Columns3, Database, Folder, Key, Link, Pencil, RefreshCw, Search, Table2, Zap } from "lucide-vue-next";
+import { Columns3, Database, FileCode, Folder, Key, Link, Pencil, Pin, RefreshCw, Search, Table2, X as XIcon, Zap } from "lucide-vue-next";
 import { useDebounceFn } from "@vueuse/core";
 import DatabaseIcon from "../icons/DatabaseIcon.vue";
 import DatabaseVisibilityDialog from "../dialogs/DatabaseVisibilityDialog.vue";
@@ -16,8 +16,9 @@ import { flattenTree } from "../../composables/useFlatTree";
 import type { FlatTreeNode } from "../../composables/useFlatTree";
 import { errorMessage } from "../../lib/rpc";
 import { useToast } from "../../composables/useToast";
-import { useConnectionsStore } from "../../stores/connections";
+import { isConnectionCancelled, useConnectionsStore } from "../../stores/connections";
 import type { ConnectionStatus } from "../../stores/connections";
+import { usePinsStore } from "../../stores/pins";
 import { useTabsStore } from "../../stores/tabs";
 import type {
 	ColumnInfo,
@@ -154,6 +155,8 @@ interface TreeRowBinding {
 	/** Row tooltip, for details that do not fit in the label. */
 	title?: string;
 	contextable: boolean;
+	/** Marks the row with the pin glyph; see `TreeRow`'s `pinned` prop. */
+	pinned: boolean;
 	onToggle: () => void;
 	onActivate: () => void;
 	/**
@@ -192,6 +195,7 @@ const scroller = ref<{ scrollToItem: (index: number) => void } | null>(null);
 
 const connections = useConnectionsStore();
 const tabs = useTabsStore();
+const pins = usePinsStore();
 const { toast } = useToast();
 
 const searchTerm = ref("");
@@ -615,6 +619,9 @@ async function fetchChildren(node: TreeNode, superseded?: () => boolean): Promis
 			try {
 				await connections.ensureConnected(node.id);
 			} catch (err) {
+				// A cancellation is the user's own doing, not a failure the row
+				// should keep reading back at them.
+				if (isConnectionCancelled(err)) return;
 				noteConnectionFailure(node.id, err);
 				return;
 			}
@@ -728,9 +735,11 @@ function activate(node: TreeNode): void {
 			table: node.table,
 		});
 		tabs.activate(tab.id);
-		void connections
-			.ensureConnected(node.connectionId)
-			.catch((err) => toast(errorMessage(err)));
+		void connections.ensureConnected(node.connectionId).catch((err) => {
+			// The tab is already open; a cancellation says nothing about it.
+			if (isConnectionCancelled(err)) return;
+			toast(errorMessage(err));
+		});
 		return;
 	}
 	// A group row carries no action of its own; clicking it just opens it.
@@ -842,6 +851,7 @@ async function reconnectConnection(): Promise<void> {
 	try {
 		await connections.reconnect(id);
 	} catch (err) {
+		if (isConnectionCancelled(err)) return;
 		toast(errorMessage(err));
 		return;
 	}
@@ -907,6 +917,11 @@ watch(
 	},
 );
 
+// The stored pins are read once per session; the store joins a second mount's
+// call onto the read already in flight, and it logs and swallows its own
+// failure rather than rejecting, so there is nothing here to catch.
+onMounted(() => void pins.hydrate());
+
 /**
  * One settled term, one crawl. The cache drop rides in here so it happens once
  * per term rather than once per character: every list still in the tree was
@@ -933,8 +948,47 @@ async function onSearchChanged(filter: string): Promise<void> {
 	}
 }
 
+/**
+ * Siblings in the order the tree draws them: a pinned table leads its own
+ * list, in pin order, and every other row keeps the order it was fetched in.
+ * The sort is stable, so a list with nothing pinned is handed back untouched.
+ */
+function orderedChildren(node: TreeNode): TreeNode[] | undefined {
+	const children = childrenOf(node);
+	if (!children) return undefined;
+	// With nothing pinned the order is already the fetched one; this is the
+	// common case, and it must not pay for the sort below.
+	if (children.length < 2 || pins.pinned.length === 0) return children;
+	const ranked = children.map((child, index) => ({
+		child,
+		index,
+		rank: pinRank(child),
+	}));
+	if (!ranked.some((entry) => entry.rank >= 0)) return children;
+	const position = (entry: { rank: number; index: number }) =>
+		entry.rank < 0 ? Number.MAX_SAFE_INTEGER : entry.rank;
+	ranked.sort((a, b) => position(a) - position(b) || a.index - b.index);
+	return ranked.map((entry) => entry.child);
+}
+
+/**
+ * The pinned position of a table row, or -1 when it is not pinned. Only
+ * tables can be pinned, and the pin list is a handful long, so the linear
+ * probe costs less than the key lookup it would take to index it.
+ */
+function pinRank(node: TreeNode): number {
+	if (node.kind !== "table") return -1;
+	return pins.pinned.findIndex(
+		(entry) =>
+			entry.connectionId === node.connectionId &&
+			entry.database === node.database &&
+			entry.schema === node.schema &&
+			entry.table === node.table,
+	);
+}
+
 const rows = computed<FlatTreeNode<TreeNode>[]>(() =>
-	flattenTree(roots.value, expanded.value, childrenOf, (node) => node.key),
+	flattenTree(roots.value, expanded.value, orderedChildren, (node) => node.key),
 );
 
 /**
@@ -1045,9 +1099,19 @@ function rowBinding(
 		// connection node, so a lookup on any other kind is guarded above.
 		connectedTitle:
 			node.kind === "connection" ? connections.status[node.id] : undefined,
-		// Only a connection owns an action of its own, so only it answers a
+		// Connections and tables own actions of their own, so both answer a
 		// right-click; every other row keeps the browser's native menu.
-		contextable: node.kind === "connection",
+		contextable: node.kind === "connection" || node.kind === "table",
+		// A membership test, so paying for it once per rendered row is cheap;
+		// the tree only draws the rows the scroller asks for.
+		pinned:
+			node.kind === "table" &&
+			pins.isPinned({
+				connectionId: node.connectionId,
+				database: node.database,
+				schema: node.schema,
+				table: node.table,
+			}),
 		onToggle: () => toggle(node),
 		onActivate: () => activate(node),
 		onContextmenu: (event: MouseEvent) => onRowContextMenu(node, event, openMenu),
@@ -1059,23 +1123,41 @@ function onRowContextMenu(
 	event: MouseEvent,
 	openMenu: (event: MouseEvent, items?: ContextMenuItem[]) => void,
 ): void {
-	if (node.kind !== "connection") return;
-	menuConnectionId.value = node.id;
-	menuItems.value = connectionMenuItems();
-	// The just-built array rides the open call as an override: the prop update
-	// and the open land in the same event turn, so reading `menuItems` back
-	// after the flush would race the very state this handler just set.
-	openMenu(event, menuItems.value);
+	if (node.kind === "connection") {
+		menuConnectionId.value = node.id;
+		menuItems.value = connectionMenuItems();
+		// The just-built array rides the open call as an override: the prop
+		// update and the open land in the same event turn, so reading
+		// `menuItems` back after the flush would race the state just set.
+		openMenu(event, menuItems.value);
+		return;
+	}
+	if (node.kind === "table") {
+		menuConnectionId.value = "";
+		menuItems.value = tableMenuItems(node);
+		openMenu(event, menuItems.value);
+	}
 }
 
 /**
- * The actions a connection row offers. Reconnect leads because it is what a
- * broken session wants; Edit and the visibility dialog configure the session
- * and the tree respectively, so they follow.
+ * The actions a connection row offers. Cancel leads when a handshake is in
+ * flight, because that is the only thing the row can do at that moment;
+ * otherwise Reconnect leads because it is what a broken session wants. Edit
+ * and the visibility dialog configure the session and the tree respectively,
+ * so they follow.
  */
 function connectionMenuItems(): ContextMenuItem[] {
 	const id = menuConnectionId.value;
 	return [
+		{
+			label: "Cancel connect",
+			// Only a handshake in progress has anything to cancel; the item is
+			// hidden rather than disabled so the menu stays about what the row
+			// can actually do right now.
+			visible: !!id && connections.status[id] === "connecting",
+			icon: XIcon,
+			action: () => void cancelConnectionAttempt(),
+		},
 		{
 			label: "Reconnect",
 			icon: RefreshCw,
@@ -1095,6 +1177,84 @@ function connectionMenuItems(): ContextMenuItem[] {
 			action: manageDatabases,
 		},
 	];
+}
+
+/** Stops the connect this row started; the store owns every bit of the race. */
+async function cancelConnectionAttempt(): Promise<void> {
+	const id = menuConnectionId.value;
+	if (!id) return;
+	await connections.cancelConnect(id);
+}
+
+/**
+ * What a table row offers. A pin is what moves the table to the top of its
+ * list, and the DDL is what the table would be created from; both are actions
+ * on the table itself rather than on the session it lives in.
+ */
+function tableMenuItems(node: Extract<TreeNode, { kind: "table" }>): ContextMenuItem[] {
+	const coords = {
+		connectionId: node.connectionId,
+		database: node.database,
+		schema: node.schema,
+		table: node.table,
+	};
+	return [
+		{
+			label: pins.isPinned(coords) ? "Unpin table" : "Pin table",
+			icon: Pin,
+			action: () => void togglePinned(coords),
+		},
+		{ label: "", separator: true },
+		{
+			label: "Generate DDL",
+			icon: FileCode,
+			action: () => void generateTableDdl(node),
+		},
+	];
+}
+
+async function togglePinned(coords: {
+	connectionId: string;
+	database: string;
+	schema: string;
+	table: string;
+}): Promise<void> {
+	try {
+		await pins.togglePin(coords);
+	} catch (err) {
+		toast(errorMessage(err));
+	}
+}
+
+/**
+ * Opens the table's DDL in a new query tab, the way the reference app does.
+ * `forceNew` is load-bearing: without it `openQueryTab` would dedupe onto the
+ * query tab already open for this table and overwrite the user's editor.
+ */
+async function generateTableDdl(
+	node: Extract<TreeNode, { kind: "table" }>,
+): Promise<void> {
+	try {
+		// Reading DDL needs a live session; this is the connect the tab the
+		// user is about to get would have made anyway.
+		await connections.ensureConnected(node.connectionId);
+		const sql = await connections.tableDdl({
+			connectionId: node.connectionId,
+			database: node.database,
+			schema: node.schema,
+			table: node.table,
+		});
+		tabs.openQueryTab({
+			connectionId: node.connectionId,
+			database: node.database,
+			schema: node.schema,
+			sql,
+			forceNew: true,
+		});
+	} catch (err) {
+		if (isConnectionCancelled(err)) return;
+		toast(errorMessage(err));
+	}
 }
 
 function editConnection(): void {
