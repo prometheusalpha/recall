@@ -25,7 +25,7 @@ import {
 } from "lucide-vue-next";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
-import type { DatabaseType, StatementResult } from "../../../shared/types";
+import type { BackendError, DatabaseType, StatementResult } from "../../../shared/types";
 import {
 	autoColumnWidth,
 	GRID_CHAR_WIDTH,
@@ -144,6 +144,13 @@ const props = withDefaults(
 		rowCount?: number | null;
 		/** True while the caller's whole-table `COUNT(*)` is running. */
 		countBusy?: boolean;
+		/**
+		 * The last run was rejected at the clause, and the rows rendered here
+		 * are the ones from before it. The band stays — it is the only place
+		 * the fix can be typed — and reports the failure in a card, so this is
+		 * what separates "showing old rows on purpose" from "showing rows".
+		 */
+		clauseError?: { error: BackendError; target: "where" | "orderBy" | null } | null;
 	}>(),
 	{
 		columnWidth: DEFAULT_COLUMN_WIDTH,
@@ -159,6 +166,7 @@ const props = withDefaults(
 		hasNextPage: false,
 		rowCount: null,
 		countBusy: false,
+		clauseError: null,
 	},
 );
 
@@ -1883,6 +1891,8 @@ function rowKey(_row: unknown, index: number): number {
 				:columns="result.columns"
 				:column-types="result.columnTypes"
 				:visible-columns="columns"
+				:error="clauseError?.error ?? null"
+				:error-target="clauseError?.target ?? null"
 				@update:where="(value) => emit('update:where', value)"
 				@update:order-by="(value) => emit('update:orderBy', value)"
 				@update:visible-columns="onVisibleColumnsChange"
@@ -2029,6 +2039,7 @@ function rowKey(_row: unknown, index: number): number {
 			<RecycleScroller
 				ref="recycleRef"
 				class="grid-body recall-scroll min-h-0 flex-1 outline-none"
+				:class="{ 'opacity-60': clauseError !== null }"
 				:style="{ '--grid-content-width': `${totalWidth}px` }"
 				:items="rows"
 				:key-field="rowKey"

@@ -11,7 +11,8 @@
  * a half-typed clause never reaches the server mid-word.
  */
 import { computed, ref, watch } from "vue";
-import { ArrowUpDown, Filter } from "lucide-vue-next";
+import { ArrowUpDown, Filter, TriangleAlert, X } from "lucide-vue-next";
+import type { BackendError } from "../../../shared/types";
 import { Button } from "../ui/button";
 import ClauseSuggestInput from "./ClauseSuggestInput.vue";
 import {
@@ -39,11 +40,24 @@ const props = withDefaults(
 		columnTypes?: string[];
 		/** The subset currently rendered; always a subset of `columns`. */
 		visibleColumns?: string[];
+		/**
+		 * The clause failure of the last run, while the rows on screen are the
+		 * ones from before it. The band is where the fix goes, so it stays and
+		 * reports the failure itself instead of the pane going blank.
+		 */
+		error?: BackendError | null;
+		/**
+		 * Which field the server blamed, when the failure can be pinned to one.
+		 * Null marks neither, and only the card names the message.
+		 */
+		errorTarget?: "where" | "orderBy" | null;
 	}>(),
 	{
 		columns: () => [],
 		visibleColumns: () => [],
 		columnTypes: () => [],
+		error: null,
+		errorTarget: null,
 	},
 );
 
@@ -101,7 +115,20 @@ function toggleColumn(column: string, visible: boolean): void {
 }
 
 /**
- * The two expressions are edited in local state and pushed up on Enter or on
+ * The card starts open and stays until it is dismissed or the clause loads:
+ * a failure the user cannot see is the failure they will hit again. A new
+ * failure reopens it, so dismissing one run's message does not silence the
+ * next one's.
+ */
+const errorDismissed = ref(false);
+watch(
+	() => props.error,
+	() => {
+		errorDismissed.value = false;
+	},
+);
+
+/** The two expressions are edited in local state and pushed up on Enter or on
  * clear, never per keystroke.
  *
  * Binding them straight to the parent meant every keystroke crossed three
@@ -152,7 +179,44 @@ function commit(): void {
 </script>
 
 <template>
-	<div class="result-filterbar" data-slot="result-filterbar">
+	<div class="result-filterbar relative" data-slot="result-filterbar">
+		<!-- The failure card, anchored under the band rather than in place of
+		     the grid. The clause that caused it is a few pixels away, and the
+		     rows behind this are the last ones that loaded, so the pane keeps
+		     both while the message says why they are old. -->
+		<div
+			v-if="error && !errorDismissed"
+			role="alert"
+			class="bg-popover text-popover-foreground absolute inset-x-0 top-full z-40 mx-0.5 mt-1 flex items-start gap-2 rounded-md border border-destructive/40 px-2 py-1.5 shadow-md"
+		>
+			<TriangleAlert
+				class="mt-0.5 size-3.5 shrink-0 text-destructive"
+				aria-hidden="true"
+			/>
+			<div class="min-w-0 flex-1">
+				<p class="break-words font-mono text-[11px] text-destructive">
+					{{ error.message }}
+				</p>
+				<p
+					v-if="error.detail"
+					class="mt-0.5 break-words whitespace-pre-wrap text-[11px] text-muted-foreground"
+				>
+					{{ error.detail }}
+				</p>
+				<p class="mt-0.5 text-[11px] text-muted-foreground">
+					<code class="rounded border border-border px-1 font-mono">{{ error.code }}</code>
+					· rows below are the last result that loaded
+				</p>
+			</div>
+			<button
+				type="button"
+				class="grid size-[1.1rem] shrink-0 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+				aria-label="Dismiss error"
+				@click="errorDismissed = true"
+			>
+				<X class="size-[0.825rem]" aria-hidden="true" />
+			</button>
+		</div>
 
 		<!-- Hidden entirely for a query tab: there is no generated statement to
 		     append a WHERE to, so an enabled box here would be a dead end. -->
@@ -173,6 +237,7 @@ function commit(): void {
 					placeholder=""
 					:columns="columns"
 					:column-types="columnTypes"
+					:invalid="errorTarget === 'where'"
 					:style="{ flexGrow: 1.4 }"
 					@submit="commit"
 				/>
@@ -185,6 +250,7 @@ function commit(): void {
 					placeholder=""
 					:columns="columns"
 					:column-types="columnTypes"
+					:invalid="errorTarget === 'orderBy'"
 					class="border-l"
 					@submit="commit"
 				/>

@@ -19,6 +19,7 @@ import { useTabsStore } from "../../stores/tabs";
 import type { Tab } from "../../stores/tabs";
 import { toast } from "../../composables/useToast";
 import { errorMessage, RPC_TIMEOUTS, rpc } from "../../lib/rpc";
+import type { BackendError, StatementResult } from "../../../shared/types";
 import ResultGrid from "./ResultGrid.vue";
 import ResultViewTabs from "./ResultViewTabs.vue";
 import ExplainPlanViewer from "./ExplainPlanViewer.vue";
@@ -541,6 +542,84 @@ const tableResult = computed(() => {
 	return result && !result.error ? result : null;
 });
 
+/**
+ * How Bun names a statement the parser rejected: the driver is the prefix, not
+ * the code itself, so both engines end in this. Measured, not assumed —
+ * Postgres sends `ERR_POSTGRES_SYNTAX_ERROR`, MariaDB `ERR_MYSQL_SYNTAX_ERROR`.
+ *
+ * Only this class keeps the grid, because only this class is the filter band's
+ * own doing. A rejected clause that is not a parse error — an unknown column,
+ * say — is reported as a server error, and lands in the pane with Retry.
+ */
+const SYNTAX_ERROR_SUFFIX = "_SYNTAX_ERROR";
+
+/**
+ * The last table result that loaded, per tab.
+ *
+ * A run replaces the tab's result, and the filter band lives inside the grid —
+ * so without this a mistyped WHERE would take the band down with it and leave
+ * nothing on screen but a Retry that replays the same broken statement.
+ */
+const lastGoodTableResult = ref<Record<string, StatementResult>>({});
+
+watch(
+	() => [tabId.value, tableResult.value] as const,
+	([id, result]) => {
+		if (id === null || !result || activeTab.value?.mode !== "table") return;
+		lastGoodTableResult.value = { ...lastGoodTableResult.value, [id]: result };
+	},
+	// The first run of a restored tab is already on screen when this mounts.
+	{ immediate: true },
+);
+
+const activeLastGoodResult = computed(() =>
+	tabId.value === null ? null : (lastGoodTableResult.value[tabId.value] ?? null),
+);
+
+/**
+ * Which field to mark as the one the server rejected.
+ *
+ * Both engines point at the whole generated statement, so the field is named
+ * from what is in it: with one clause filled in, that is the one. With both
+ * filled in nothing tells them apart, and the card carries the message rather
+ * than the mark landing on a guess.
+ */
+const clauseErrorTarget = computed<"where" | "orderBy" | null>(() => {
+	const where = activeWhere.value.trim().length > 0;
+	const orderBy = activeOrderBy.value.trim().length > 0;
+	if (where === orderBy) return null;
+	return where ? "where" : "orderBy";
+});
+
+/**
+ * The clause failure the grid is still sitting on, if any. Null as soon as a
+ * run succeeds, which is what takes the card down and un-dims the rows.
+ */
+const tableClauseError = computed<{
+	error: BackendError;
+	target: "where" | "orderBy" | null;
+} | null>(() => {
+	const error = activeResult.value?.error;
+	if (!error || !isTableTab.value) return null;
+	if (!error.code.endsWith(SYNTAX_ERROR_SUFFIX)) return null;
+	// A generated statement carries nothing the user typed unless a clause is
+	// set, so a rejection with both boxes empty is a bug of ours, not a typo.
+	if (activeWhere.value.trim() === "" && activeOrderBy.value.trim() === "") {
+		return null;
+	}
+	return { error, target: clauseErrorTarget.value };
+});
+
+/**
+ * What the grid renders. A rejected clause keeps the previous rows under the
+ * card: they are the last state of the table the user can still read, and the
+ * band above them is where the typo gets fixed.
+ */
+const tableGridResult = computed(
+	() =>
+		tableResult.value ?? (tableClauseError.value ? activeLastGoodResult.value : null),
+);
+
 /** Loading until a run has been attempted and has settled. */
 const tableLoading = computed(
 	() => isRunning.value || (tabId.value !== null && attemptedTableTabs.value[tabId.value] !== true),
@@ -754,8 +833,9 @@ async function reconnectActive(): Promise<void> {
 			<Pane :size="100" class="flex min-h-0 flex-col">
 				<StatementBar v-if="tabId" :tab-id="tabId" />
 				<ResultGrid
-					v-if="tableResult"
-					:result="tableResult"
+					v-if="tableGridResult"
+					:result="tableGridResult"
+					:clause-error="tableClauseError"
 					:editable="editableTarget"
 					:insert-target="insertTarget"
 					:busy="isRunning"

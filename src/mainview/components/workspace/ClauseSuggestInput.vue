@@ -15,7 +15,6 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { Component } from "vue";
 import { ChevronDown, X } from "lucide-vue-next";
-import { cn } from "../../lib/cn";
 
 /**
  * The run being completed is the identifier at the very end of the text, not
@@ -43,8 +42,10 @@ const props = withDefaults(
 		columnTypes: string[];
 		/** Emitted on every accepted suggestion, so the parent can apply. */
 		commitOnPick?: boolean;
+		/** The last run was rejected at this clause, so the frame turns red. */
+		invalid?: boolean;
 	}>(),
-	{ columns: () => [], columnTypes: () => [], commitOnPick: false },
+	{ columns: () => [], columnTypes: () => [], commitOnPick: false, invalid: false },
 );
 
 const emit = defineEmits<{
@@ -60,6 +61,19 @@ const open = ref(false);
 const activeIndex = ref(0);
 
 const active = computed(() => props.modelValue.trim().length > 0);
+
+/**
+ * The frame around the field. The list being open and a rejected clause both
+ * want it, and the rejection is the one the user cannot see from anywhere
+ * else, so it wins.
+ */
+const frame = computed(() =>
+	props.invalid
+		? "ring-1 ring-inset ring-destructive"
+		: open.value
+			? "ring-1 ring-inset ring-ring"
+			: "",
+);
 
 /** What the user has typed of the identifier under the caret, lowercased. */
 const typedToken = computed(() => {
@@ -248,7 +262,7 @@ watch(activeIndex, () => {
 	<div ref="root" class="relative flex min-w-0 flex-1 flex-col">
 		<div
 			class="flex min-h-0 flex-1 items-center gap-1 px-1.5"
-			:class="cn(open && 'ring-1 ring-inset ring-ring')"
+			:class="frame"
 		>
 			<component
 				:is="icon"
@@ -271,6 +285,7 @@ watch(activeIndex, () => {
 				aria-autocomplete="list"
 				:aria-expanded="open"
 				:aria-label="`${label} expression`"
+				:aria-invalid="invalid || undefined"
 				class="h-[1.375rem] min-w-0 flex-1 bg-transparent px-0 text-[0.825rem] outline-none placeholder:text-muted-foreground"
 				:placeholder="placeholder"
 				@input="onInput"
