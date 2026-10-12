@@ -583,10 +583,12 @@ export async function probeStatementColumns(
 }
 
 /**
- * Exact row count of a whole table, ignoring whatever filter the caller shows.
+ * Exact row count of the table, narrowed by the caller's `where`.
  *
- * `COUNT(*)` is a full scan on both dialects — the expense the table tab's
- * paging exists to avoid — so it is asked for explicitly, not on every load.
+ * The page's `LIMIT`/`OFFSET` are the caller's window, not the set being
+ * counted, so only the typed filter is applied; `ORDER BY` cannot change a
+ * count. `COUNT(*)` is a full scan on both dialects — the expense the table
+ * tab's paging exists to avoid — so it is asked for explicitly, not on load.
  */
 export async function countTableRows(
 	db: SQL,
@@ -594,10 +596,14 @@ export async function countTableRows(
 	database: string,
 	schema: string,
 	table: string,
+	where?: string,
 ): Promise<number> {
-	const rows = (await db.unsafe(
-		`SELECT COUNT(*) AS count FROM ${driver.qualify(database, schema, table)}`,
-	)) as Array<Record<string, unknown>>;
+	const target = driver.qualify(database, schema, table);
+	const filter = where?.trim();
+	const statement = filter
+		? `SELECT COUNT(*) AS count FROM ${target} WHERE ${filter}`
+		: `SELECT COUNT(*) AS count FROM ${target}`;
+	const rows = (await db.unsafe(statement)) as Array<Record<string, unknown>>;
 	const value = rows[0]?.count;
 	// Postgres widens `COUNT(*)` to `bigint`, which the driver may surface as a
 	// bigint or, when it is too large for a JS number, as a string.

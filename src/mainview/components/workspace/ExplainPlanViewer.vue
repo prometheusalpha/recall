@@ -7,8 +7,9 @@
  * view always shows the statement that was run alongside the server's answer.
  */
 import { computed, ref, watch } from "vue";
-import { AlertCircle, Braces, FileText, GitBranch, Loader2, Workflow } from "lucide-vue-next";
+import { AlertCircle, Braces, Copy, FileText, GitBranch, Loader2, Workflow } from "lucide-vue-next";
 import { Button } from "../ui/button";
+import { toast } from "../../composables/useToast";
 import type { ExplainPlan, ExplainPlanNode } from "../../../shared/types";
 import ExplainPlanDiagram from "./ExplainPlanDiagram.vue";
 import ExplainPlanNodeTree from "./ExplainPlanNodeTree.vue";
@@ -48,6 +49,54 @@ const rawText = computed(() => {
 	if (typeof raw === "string") return raw;
 	return JSON.stringify(raw, null, 2);
 });
+
+/** The node's measured row count, when the plan carries one. */
+function actualRowsOf(node: ExplainPlanNode): string | undefined {
+	for (const detail of node.details) {
+		const match = detail.match(/Actual Rows:\s*(\S+)/);
+		if (match) return match[1];
+	}
+	return undefined;
+}
+
+/**
+ * Appends the operator tree as plain text, one node per line, indented by
+ * depth. The fields are the ones the tree rows show, so a copied tree reads
+ * like the tree on screen rather than a second, differently worded view.
+ */
+function appendTreeLines(nodes: ExplainPlanNode[], depth: number, lines: string[]): void {
+	for (const node of nodes) {
+		const parts = [node.nodeType];
+		if (node.relation) parts.push(node.relation);
+		if (node.index) parts.push(`[${node.index}]`);
+		if (node.cost) parts.push(`c:${node.cost}`);
+		if (node.rows) parts.push(`e:${node.rows}`);
+		const actual = actualRowsOf(node);
+		if (actual) parts.push(`a:${actual}`);
+		lines.push(`${"  ".repeat(depth)}${parts.join(" ")}`);
+		appendTreeLines(node.children, depth + 1, lines);
+	}
+}
+
+/** The tree as text, for the tree view's copy button. */
+const treeText = computed(() => {
+	if (!props.plan) return "";
+	const lines: string[] = [];
+	appendTreeLines(props.plan.nodes, 0, lines);
+	return lines.join("\n");
+});
+
+/** Copies a view's contents, reporting either outcome so the button is never
+ *  a silent no-op on a locked-down clipboard. */
+async function copyText(text: string, noun: string): Promise<void> {
+	if (!text) return;
+	try {
+		await navigator.clipboard.writeText(text);
+		toast(`${noun} copied`);
+	} catch {
+		toast(`Could not copy the ${noun.toLowerCase()}`);
+	}
+}
 </script>
 
 <template>
@@ -97,9 +146,23 @@ const rawText = computed(() => {
 			<ExplainPlanDiagram :nodes="plan.nodes" />
 		</div>
 
-		<div v-else-if="activeView === 'tree'" class="min-h-0 flex-1 overflow-auto">
-			<div class="mx-auto max-w-5xl space-y-px p-2">
-				<ExplainPlanNodeTree v-for="node in plan.nodes" :key="node.id" :node="node" />
+		<div v-else-if="activeView === 'tree'" class="flex min-h-0 flex-1 flex-col">
+			<div class="flex h-8 shrink-0 items-center justify-end border-b px-3">
+				<Button
+					size="sm"
+					variant="ghost"
+					class="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+					:disabled="!treeText"
+					@click="copyText(treeText, 'Tree')"
+				>
+					<Copy class="h-3.5 w-3.5" aria-hidden="true" />
+					Copy
+				</Button>
+			</div>
+			<div class="min-h-0 flex-1 overflow-auto">
+				<div class="mx-auto max-w-5xl space-y-px p-2">
+					<ExplainPlanNodeTree v-for="node in plan.nodes" :key="node.id" :node="node" />
+				</div>
 			</div>
 		</div>
 
@@ -110,7 +173,18 @@ const rawText = computed(() => {
 					<pre class="overflow-auto whitespace-pre rounded border bg-muted/30 p-3 font-mono text-xs leading-relaxed">{{ sql }}</pre>
 				</div>
 				<div v-if="rawText">
-					<div class="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">Raw plan</div>
+					<div class="mb-1 flex items-center justify-between">
+						<span class="text-[10px] uppercase tracking-wide text-muted-foreground">Raw plan</span>
+						<Button
+							size="xs"
+							variant="ghost"
+							class="h-5 gap-1 px-1.5 text-[11px] font-normal text-muted-foreground hover:text-foreground"
+							@click="copyText(rawText, 'Raw plan')"
+						>
+							<Copy class="h-3 w-3" aria-hidden="true" />
+							Copy
+						</Button>
+					</div>
 					<pre class="overflow-auto whitespace-pre rounded border bg-muted/30 p-3 font-mono text-xs leading-relaxed">{{ rawText }}</pre>
 				</div>
 			</div>

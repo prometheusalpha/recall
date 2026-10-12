@@ -138,9 +138,11 @@ export type BunRequests = {
 		response: string;
 	};
 	/**
-	 * Exact row count of a table, for the result bar's count button. A whole
-	 * count, not the page or the filtered view — the statement the table tab
-	 * runs carries a `LIMIT`, so its `rows.length` is a floor, never a total.
+	 * Exact row count of a table, for the result bar's count button. It counts
+	 * the set the caller's filter narrows to, not the page — the statement the
+	 * table tab runs carries a `LIMIT`, so its `rows.length` is a floor, never
+	 * a total. The typed `WHERE` is passed through verbatim, the same way it is
+	 * appended to the tab's `SELECT`.
 	 */
 	countTable: {
 		params: {
@@ -148,6 +150,8 @@ export type BunRequests = {
 			database: string;
 			schema: string;
 			table: string;
+			/** The raw `WHERE` the table tab is filtering by; omitted when none. */
+			where?: string;
 		};
 		response: number;
 	};

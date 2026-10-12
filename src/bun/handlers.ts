@@ -429,9 +429,10 @@ export const handlers = {
 		database,
 		schema,
 		table,
+		where,
 	}: Params<"countTable">) {
 		const { db, config } = await getConnection(connectionId, database);
-		return countTableRows(db, driverFor(config.dbType), database, schema, table);
+		return countTableRows(db, driverFor(config.dbType), database, schema, table, where);
 	},
 
 	async updateCell({

@@ -96,12 +96,15 @@ Phase 16:
 - Cancel connect dial sidebar context menu
 
 Phase 17:
-- [ ] Explain plan viewer (code xong, chờ test trong app): `EXPLAIN (FORMAT JSON)` cho Postgres, `EXPLAIN FORMAT=JSON` cho MySQL, không chạy câu lệnh; canvas + tree + raw, `Opt/Ctrl+Shift+E` hoặc nút Explain cạnh Run, switcher Result | Explain trên result pane
+- [x] Explain plan viewer (code xong, chờ test trong app): `EXPLAIN (FORMAT JSON)` cho Postgres, `EXPLAIN FORMAT=JSON` cho MySQL, không chạy câu lệnh; canvas + tree + raw, `Opt/Ctrl+Shift+E` hoặc nút Explain cạnh Run, switcher Result | Explain trên result pane
   - MySQL 26.7.0 chỉ trả document `query_plan`; parser còn nhánh `query_block` cho server cũ nhưng chưa có server cũ để test
   - MySQL UPDATE/DELETE qua `FORMAT=JSON` chỉ ra `<not executable by iterator executor>`; muốn đủ phải thêm fallback `EXPLAIN` dạng bảng như dbx
 
 Sau:
 - Xuống dòng trong cell
+- Sửa nút count là kết quả query chứ k phải size cả bảng (code xong, chờ test trong app)
+- copy raw plan / tree (code xong, chờ test trong app)
 - Màn loading 
 - Cơ chế update
+- Khoảng trống dưới sql editor
 - Redis support

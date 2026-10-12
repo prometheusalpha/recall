@@ -137,12 +137,12 @@ const props = withDefaults(
 		/** Whether the page that produced this result came back full. */
 		hasNextPage?: boolean;
 		/**
-		 * The table's whole row count, once the caller has run it; `null` until
-		 * then. Only the table branch of the result bar reads it — a query
-		 * result's length is already its total.
+		 * The exact row count of the filtered set, once the caller has run it;
+		 * `null` until then. Only the table branch of the result bar reads it —
+		 * a query result's length is already its total.
 		 */
 		rowCount?: number | null;
-		/** True while the caller's whole-table `COUNT(*)` is running. */
+		/** True while the caller's `COUNT(*)` is running. */
 		countBusy?: boolean;
 		/**
 		 * The last run was rejected at the clause, and the rows rendered here
@@ -2165,8 +2165,10 @@ function rowKey(_row: unknown, index: number): number {
 					<!-- A table tab's statement carries a `LIMIT`, so its row count is
 					     a floor, not a total: it reads `loaded/known` and, while more
 					     rows may exist, the `+` on the upper bound runs the one
-					     `COUNT(*)` that turns it into an exact total. A query tab's
-					     rows are the whole result, so its length is already the total. -->
+					     `COUNT(*)` that turns it into an exact total. That count is
+					     of the filtered set, not the page, so it stays valid across
+					     paging. A query tab's rows are the whole result, so its
+					     length is already the total. -->
 					<span v-if="page === undefined" class="shrink-0 tabular-nums">
 						{{ result.truncated ? "Loaded" : "Total" }} {{ rows.length }} rows
 					</span>
@@ -2177,7 +2179,7 @@ function rowKey(_row: unknown, index: number): number {
 							v-else-if="mayHaveMoreRows && !countBusy"
 							type="button"
 							class="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-foreground"
-							title="Count every row in the table"
+							title="Count every row matching the filter"
 							@click="emit('count')"
 						>
 							{{ loadedRows }}+

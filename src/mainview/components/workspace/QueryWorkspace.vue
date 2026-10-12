@@ -240,6 +240,9 @@ function setWhere(value: string): void {
 	const id = tabId.value;
 	if (!id) return;
 	tableWhere.value = { ...tableWhere.value, [id]: value };
+	// The exact count belongs to the filter that produced it, so editing the
+	// filter retires it: the next count has to be asked for against the new one.
+	clearTableCount(id);
 }
 
 function setOrderBy(value: string): void {
@@ -343,13 +346,22 @@ const hasNextPage = computed(
 );
 
 /**
- * The tab's whole-table row count, once the user asks for it, and whether that
- * count is in flight. `COUNT(*)` is a full scan, so it is never asked for on
- * load — the count button is the one place that pays for it. Kept per tab so
- * switching away and back does not pay for it twice.
+ * The tab's exact row count, under its current filter, once the user asks for
+ * it, and whether that count is in flight. `COUNT(*)` is a full scan, so it is
+ * never asked for on load — the count button is the one place that pays for it.
+ * Kept per tab so switching away and back does not pay for it twice; dropped
+ * when the filter changes, because the count would then describe rows the tab
+ * no longer shows.
  */
 const tableRowCount = ref<Record<string, number>>({});
 const tableCountBusy = ref<Record<string, boolean>>({});
+
+function clearTableCount(id: string): void {
+	if (tableRowCount.value[id] === undefined) return;
+	const next = { ...tableRowCount.value };
+	delete next[id];
+	tableRowCount.value = next;
+}
 
 const activeRowCount = computed(() =>
 	tabId.value ? (tableRowCount.value[tabId.value] ?? null) : null,
@@ -358,7 +370,7 @@ const activeCountBusy = computed(() =>
 	tabId.value ? tableCountBusy.value[tabId.value] === true : false,
 );
 
-/** Runs the whole-table `COUNT(*)` the result bar's count button asks for. */
+/** Runs the `COUNT(*)` — the filter's set, not the page — the count button asks for. */
 async function countActiveTable(): Promise<void> {
 	const tab = activeTab.value;
 	const id = tabId.value;
@@ -377,6 +389,7 @@ async function countActiveTable(): Promise<void> {
 				database: tab.database,
 				schema: tab.schema,
 				table: tab.table,
+				where: tableWhere.value[id]?.trim() || undefined,
 			},
 			{ maxRequestTime: RPC_TIMEOUTS.execute },
 		);
