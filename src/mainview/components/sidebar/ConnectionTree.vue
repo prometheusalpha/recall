@@ -3,7 +3,7 @@ import { computed, defineComponent, h, onMounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
-import { Columns3, Database, FileCode, Folder, Key, Link, Pencil, Pin, RefreshCw, Search, Table2, X as XIcon, Zap } from "lucide-vue-next";
+import { Columns3, Copy, Database, FileCode, Folder, Key, Link, Pencil, Pin, RefreshCw, Search, Table2, X as XIcon, Zap } from "lucide-vue-next";
 import { useDebounceFn } from "@vueuse/core";
 import DatabaseIcon from "../icons/DatabaseIcon.vue";
 import DatabaseVisibilityDialog from "../dialogs/DatabaseVisibilityDialog.vue";
@@ -107,6 +107,11 @@ type TreeNode =
 			badge?: LeafBadge;
 			/** Row tooltip: a column comment, or a trigger body. */
 			title?: string;
+			/**
+			 * The statement that rebuilds this object. Only index rows carry
+			 * one, and it is also what makes the row answer a right-click.
+			 */
+			ddl?: string;
 	  };
 
 /** The four object kinds a table row breaks down into. */
@@ -475,17 +480,20 @@ function columnLeaves(tableKey: string, columns: ColumnInfo[]): TreeNode[] {
  *
  * As with columns, the title is unconditional: uniqueness and the index method
  * are not on the label, and a composite index's key list is exactly what gets
- * truncated away in a narrow sidebar.
+ * truncated away in a narrow sidebar. A partial index adds its predicate, which
+ * the label has no room for and which changes what the index can be used for.
  */
 function indexLeaves(tableKey: string, indexes: IndexInfo[]): TreeNode[] {
 	return indexes.map((index) => ({
 		kind: "leaf",
 		key: makeKey("leaf", tableKey, "indexes", index.name),
 		label: `${index.name} (${index.columns.join(", ")})`,
+		ddl: index.ddl,
 		title: [
 			`${index.name} (${index.columns.join(", ")})`,
 			index.isPrimary ? "PRIMARY KEY" : index.isUnique ? "UNIQUE" : undefined,
 			index.method ?? undefined,
+			index.condition === null ? undefined : `WHERE ${index.condition}`,
 		]
 			.filter((part) => part !== undefined)
 			.join(" · "),
@@ -1099,9 +1107,12 @@ function rowBinding(
 		// connection node, so a lookup on any other kind is guarded above.
 		connectedTitle:
 			node.kind === "connection" ? connections.status[node.id] : undefined,
-		// Connections and tables own actions of their own, so both answer a
-		// right-click; every other row keeps the browser's native menu.
-		contextable: node.kind === "connection" || node.kind === "table",
+		// Connections, tables and index rows own actions of their own, so all
+		// three answer a right-click; every other row keeps the browser's menu.
+		contextable:
+			node.kind === "connection" ||
+			node.kind === "table" ||
+			(node.kind === "leaf" && node.ddl !== undefined),
 		// A membership test, so paying for it once per rendered row is cheap;
 		// the tree only draws the rows the scroller asks for.
 		pinned:
@@ -1135,6 +1146,15 @@ function onRowContextMenu(
 	if (node.kind === "table") {
 		menuConnectionId.value = "";
 		menuItems.value = tableMenuItems(node);
+		openMenu(event, menuItems.value);
+		return;
+	}
+	// Every other row that answers a click carries its DDL in the node itself,
+	// so the items are built around that node rather than around a ref read
+	// back later.
+	if (node.kind === "leaf" && node.ddl !== undefined) {
+		menuConnectionId.value = "";
+		menuItems.value = indexMenuItems(node.ddl);
 		openMenu(event, menuItems.value);
 	}
 }
@@ -1211,6 +1231,33 @@ function tableMenuItems(node: Extract<TreeNode, { kind: "table" }>): ContextMenu
 			action: () => void generateTableDdl(node),
 		},
 	];
+}
+
+/**
+ * What an index row offers. Copying is the whole of it: the DDL is already in
+ * the node, so unlike a table it needs no session and no tab.
+ */
+function indexMenuItems(ddl: string): ContextMenuItem[] {
+	return [
+		{
+			label: "Copy DDL",
+			icon: Copy,
+			action: () => void copyIndexDdl(ddl),
+		},
+	];
+}
+
+/**
+ * Writes the index's `CREATE INDEX` to the clipboard. Both outcomes are
+ * reported, so a locked-down clipboard is never a silent no-op.
+ */
+async function copyIndexDdl(ddl: string): Promise<void> {
+	try {
+		await navigator.clipboard.writeText(ddl);
+		toast("Index DDL copied");
+	} catch {
+		toast("Could not copy the index DDL");
+	}
 }
 
 async function togglePinned(coords: {

@@ -74,6 +74,13 @@ export interface IndexInfo {
 	isPrimary: boolean;
 	/** "btree" | "hash" | … ; null when the server does not report one. */
 	method: string | null;
+	/**
+	 * The `WHERE` body of a partial index (Postgres `pg_index.indpred`); null
+	 * for an index that keeps every row, which is all MySQL can build.
+	 */
+	condition: string | null;
+	/** The statement that rebuilds this index, ready to copy. */
+	ddl: string;
 }
 
 /** One foreign-key constraint on a table. */

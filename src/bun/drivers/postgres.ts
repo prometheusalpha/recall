@@ -272,6 +272,11 @@ export const postgresDriver: Driver = {
 				"i.indisunique AS is_unique, " +
 				"i.indisprimary AS is_primary, " +
 				"am.amname AS method, " +
+				// The whole statement, `WHERE` and all, as the server itself
+				// renders it; `pg_get_expr` on the same row gives just the
+				// predicate a partial index keeps, for the tooltip.
+				"pg_catalog.pg_get_indexdef(i.indexrelid) AS ddl, " +
+				"pg_catalog.pg_get_expr(i.indpred, i.indrelid) AS condition, " +
 				"COALESCE(a.attname, " +
 				"  pg_catalog.pg_get_indexdef(i.indexrelid, k.position::int, true)) " +
 				"  AS column_name " +
@@ -307,6 +312,11 @@ export const postgresDriver: Driver = {
 					isUnique: row.is_unique === true,
 					isPrimary: row.is_primary === true,
 					method: row.method == null ? null : String(row.method),
+					// Both are identical on every row of one index, so they are
+					// read where the other per-index flags are: at the name
+					// change, not once per key column.
+					condition: row.condition == null ? null : String(row.condition),
+					ddl: String(row.ddl),
 				});
 			}
 			// Rows arrive sorted by (name, position), so appending keeps each

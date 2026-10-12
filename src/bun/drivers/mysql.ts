@@ -222,7 +222,11 @@ export const mysqlDriver: Driver = {
 			[schema, table, ...SYSTEM_SCHEMAS],
 		)) as Array<Record<string, unknown>>;
 
-		const indexes: IndexInfo[] = [];
+		// The key list of an index is only complete once every row of it has
+		// been folded in, and MySQL has no catalog function that prints an index
+		// back the way Postgres's `pg_get_indexdef` does, so the statement is
+		// composed at the end rather than as each index is opened.
+		const indexes: Array<Omit<IndexInfo, "ddl">> = [];
 		for (const row of rows) {
 			const name = String(row.name);
 			// Sorted by (index_name, seq_in_index), so a name change marks the
@@ -240,6 +244,9 @@ export const mysqlDriver: Driver = {
 					// spelling Postgres reports through `pg_am`.
 					method:
 						row.method == null ? null : String(row.method).toLowerCase(),
+					// MySQL has no partial indexes; the field exists so both
+					// drivers answer the same shape.
+					condition: null,
 				});
 			}
 			// Rows are sorted by (index_name, seq_in_index), so appending keeps
@@ -248,7 +255,10 @@ export const mysqlDriver: Driver = {
 				indexes[indexes.length - 1].columns.push(String(row.column_name));
 			}
 		}
-		return indexes;
+		return indexes.map((index) => ({
+			...index,
+			ddl: indexDdl(schema, table, index),
+		}));
 	},
 
 	async listTriggers(
@@ -426,6 +436,38 @@ function referentialRule(value: unknown): string | null {
 	return rule === "" ? null : rule;
 }
 
+
+/**
+ * The statement that would rebuild one index. MySQL has no catalog function
+ * that prints an index back the way Postgres's `pg_get_indexdef` does, so it is
+ * composed from what `information_schema.statistics` reported. Two spellings
+ * need care: a primary key is only expressible as a table constraint, and
+ * FULLTEXT/SPATIAL are index kinds rather than `USING` options. `USING HASH` is
+ * the one access method worth naming, because BTREE is every engine's default.
+ */
+function indexDdl(
+	schema: string,
+	table: string,
+	index: Omit<IndexInfo, "ddl">,
+): string {
+	const target = mysqlDriver.qualify("", schema, table);
+	const keyList = index.columns
+		.map((column) => mysqlDriver.quoteIdent(column))
+		.join(", ");
+	if (index.isPrimary) {
+		return `ALTER TABLE ${target} ADD PRIMARY KEY (${keyList})`;
+	}
+	const kind =
+		index.method === "fulltext"
+			? "FULLTEXT "
+			: index.method === "spatial"
+				? "SPATIAL "
+				: index.isUnique
+					? "UNIQUE "
+					: "";
+	const using = index.method === "hash" ? " USING HASH" : "";
+	return `CREATE ${kind}INDEX ${mysqlDriver.quoteIdent(index.name)} ON ${target} (${keyList})${using}`;
+}
 
 type TlsOption = SQL.PostgresOrMySQLOptions["tls"];
 /**

@@ -1321,6 +1321,10 @@ async function mountEditor(): Promise<void> {
 	const readOnlyConfig = (locked: boolean) => [
 		S.EditorState.readOnly.of(locked),
 		V.EditorView.editable.of(!locked),
+		// Blank room below the last line, so any line can be scrolled to the
+		// top of the pane. Wears off in the read-only DDL view, which is a
+		// fixed-height read rather than a place to type at the end of.
+		locked ? [] : V.scrollPastEnd(),
 	];
 
 	// Colours come from the token palette globals.css already defines.
