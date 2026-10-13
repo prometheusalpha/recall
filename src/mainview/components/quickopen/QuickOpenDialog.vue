@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import type { Component } from "vue";
-import { FileCode2, Search, Server, Table2 } from "lucide-vue-next";
+import { FileCode2, Search, Server } from "lucide-vue-next";
 import { matchFuzzy } from "../../lib/fuzzy";
+import { tableGlyph } from "../../lib/tableGlyph";
 import { useQuickOpen, type QuickOpenItem } from "../../composables/useQuickOpen";
 import {
 	Dialog,
@@ -29,11 +30,20 @@ const { open, query, items, searching, activate, close } = useQuickOpen();
 const highlightedId = ref<string | null>(null);
 const listRef = ref<HTMLElement | null>(null);
 
-const ICON_BY_KIND: Record<QuickOpenItem["kind"], Component> = {
-	table: Table2,
+/** Only the kinds that are not table-like carry a fixed glyph. */
+const ICON_BY_KIND: Record<"file" | "connection", Component> = {
 	file: FileCode2,
 	connection: Server,
 };
+
+/**
+ * The glyph before a row. A table-like row wears its own type's glyph, so a
+ * view is told apart from a table here exactly as it is in the sidebar.
+ */
+function rowGlyph(item: QuickOpenItem): { icon: Component; iconClass: string } {
+	if (item.kind === "table") return tableGlyph(item.type);
+	return { icon: ICON_BY_KIND[item.kind], iconClass: "text-muted-foreground" };
+}
 
 interface Segment {
 	text: string;
@@ -193,8 +203,9 @@ function onKeydown(event: KeyboardEvent): void {
 					@mouseenter="highlightedId = item.id"
 				>
 					<component
-						:is="ICON_BY_KIND[item.kind]"
-						class="h-4 w-4 shrink-0 text-muted-foreground"
+						:is="rowGlyph(item).icon"
+						class="h-4 w-4 shrink-0"
+						:class="rowGlyph(item).iconClass"
 						aria-hidden="true"
 					/>
 					<span class="min-w-0 flex-1">

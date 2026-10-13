@@ -3,7 +3,7 @@ import { computed, defineComponent, h, onMounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
-import { Columns3, Copy, Database, FileCode, Folder, Key, Link, Pencil, Pin, RefreshCw, Search, Table2, X as XIcon, Zap } from "lucide-vue-next";
+import { Columns3, Copy, Database, FileCode, Folder, Key, Link, Pencil, Pin, RefreshCw, Search, X as XIcon, Zap } from "lucide-vue-next";
 import { useDebounceFn } from "@vueuse/core";
 import DatabaseIcon from "../icons/DatabaseIcon.vue";
 import DatabaseVisibilityDialog from "../dialogs/DatabaseVisibilityDialog.vue";
@@ -15,6 +15,7 @@ import type { ContextMenuItem } from "../ui/CustomContextMenu.vue";
 import { flattenTree } from "../../composables/useFlatTree";
 import type { FlatTreeNode } from "../../composables/useFlatTree";
 import { errorMessage } from "../../lib/rpc";
+import { tableGlyph } from "../../lib/tableGlyph";
 import { useToast } from "../../composables/useToast";
 import { isConnectionCancelled, useConnectionsStore } from "../../stores/connections";
 import type { ConnectionStatus } from "../../stores/connections";
@@ -85,6 +86,8 @@ type TreeNode =
 			database: string;
 			schema: string;
 			table: string;
+			/** The driver's own kind, e.g. `view`; decides the row's glyph. */
+			type: string;
 			connectionId: string;
 	  }
 	| {
@@ -392,6 +395,7 @@ async function tableNodes(
 		database,
 		schema,
 		table: entry.name,
+		type: entry.type,
 		connectionId,
 	}));
 }
@@ -1001,8 +1005,9 @@ const rows = computed<FlatTreeNode<TreeNode>[]>(() =>
 
 /**
  * The glyph a row wears. Colour is what makes a long table list skimmable, so
- * each kind keeps the hue DBX gives it: amber for containers, green for tables,
- * and one hue per metadata group. Leaves carry none — their label says it all.
+ * each kind keeps the hue DBX gives it: amber for containers, the hue its own
+ * type calls for under a table row, and one hue per metadata group. Leaves
+ * carry none — their label says it all.
  */
 function rowGlyph(node: TreeNode): { icon?: Component; iconClass: string } {
 	// A brand mark carries its own colour, so the connection row wears no tint
@@ -1015,7 +1020,7 @@ function rowGlyph(node: TreeNode): { icon?: Component; iconClass: string } {
 	if (node.kind === "schema") {
 		return { icon: Folder, iconClass: "text-yellow-500" };
 	}
-	if (node.kind === "table") return { icon: Table2, iconClass: "text-green-500" };
+	if (node.kind === "table") return tableGlyph(node.type);
 	if (node.kind === "group") {
 		const group = META_GROUPS[node.group];
 		return { icon: group.icon, iconClass: group.iconClass };

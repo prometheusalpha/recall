@@ -29,6 +29,8 @@ export type QuickOpenItem =
 			database: string;
 			schema: string;
 			table: string;
+			/** The driver's own kind, e.g. `view`; decides the row's glyph. */
+			type: string;
 	  }
 	| {
 			kind: "file";
@@ -258,6 +260,7 @@ export function useQuickOpen(): QuickOpenPalette {
 						database: cached.database,
 						schema: cached.schema,
 						table: entry.name,
+						type: entry.type,
 					});
 				}
 			});
