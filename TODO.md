@@ -105,7 +105,8 @@ Sau:
 - Sửa nút count là kết quả query chứ k phải size cả bảng (code xong, chờ test trong app)
 - copy raw plan / tree (code xong, chờ test trong app)
 - Sidebar index: tooltip hiện condition của partial index, context menu Copy DDL (code xong, chờ test trong app)
+- Khoảng trống dưới sql editor (code xong, chờ test trong app)
+- Sửa: khi reload table thì mất thứ tự code đã thay đổi
 - Màn loading 
 - Cơ chế update
-- Khoảng trống dưới sql editor (code xong, chờ test trong app)
 - Redis support

@@ -275,10 +275,24 @@ const hiddenColumns = computed(() => props.hiddenColumns);
  * column must not renumber the one that was moved.
  *
  * Empty means "the result's own order". The overlay is a view concern rather
- * than a rewrite of the statement, so it is discarded with the result it
- * described instead of being carried into the next one.
+ * than a rewrite of the statement, so it lives and dies with the shape it
+ * describes: re-running the same table keeps it, another table drops it.
  */
 const columnOrder = ref<string[]>([]);
+
+/**
+ * Order-independent signature of a column list, so "the same result, re-read"
+ * is told apart from "a different result". `SELECT *` lists a table's columns
+ * the same way every time, so a reload of one table matches and a switch to
+ * another does not.
+ */
+function columnsSignature(names: string[]): string {
+	return [...names].sort().join("\u0000");
+}
+
+/** The signature the overlay on screen was built from, seeded from the result
+ *  the grid was created with — a restored tab arrives already carrying one. */
+let orderedColumns = columnsSignature(props.result.columns);
 
 const columns = computed(() => {
 	const visible = props.result.columns.filter(
@@ -1592,14 +1606,20 @@ function onKeydown(event: KeyboardEvent): void {
 /** A fresh result invalidates every grid-local affordance tied to the old rows. */
 watch(
 	() => props.result,
-	() => {
+	(result) => {
 		selection.clear();
 		editing.value = null;
-		// The order overlay described the old result's columns. Carrying it over
-		// would apply a drag the user made to a shape that no longer exists, and
-		// the reconciliation in `columns` would quietly append the new columns to
-		// the end of an order they were never part of.
-		columnOrder.value = [];
+		// Same columns, new rows: the drag still describes what is on screen, so a
+		// reload (or a sort, or a new filter) keeps the order the user put the
+		// columns in. A changed column set drops the overlay — carrying it over
+		// would apply a drag to a shape that no longer exists, and the
+		// reconciliation in `columns` would quietly append the new columns to the
+		// end of an order they were never part of.
+		const signature = columnsSignature(result.columns);
+		if (signature !== orderedColumns) {
+			orderedColumns = signature;
+			columnOrder.value = [];
+		}
 		stopColumnDrag();
 		// A new result can be short enough to lose the body's vertical
 		// scrollbar, which changes the header's horizontal range.
