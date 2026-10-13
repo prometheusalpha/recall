@@ -75,7 +75,12 @@ Phase 13:
   - Nguyên nhân: Cottontail 0.7.1 đóng gói Bun 1.3.10, `parsePostgresTimestamp` đưa text `timestamptz` vào `Date.parse`. Postgres render offset tròn giờ thành `+00` (không có phút) — JSC từ chối chuỗi đó → Invalid Date → `toJsonSafe` đổi thành `null`. Chỉ `timestamptz` chết, `timestamp` sống vì hàm tự thêm `Z`
   - Đã ép session `timezone=+05:45` trong `src/bun/drivers/postgres.ts`. Offset có phút thì Postgres render dài ra nên `Date.parse` hiểu được. `+07` không dùng được vì Postgres luôn render offset ngắn nhất từ giá trị thật
   - Xoá workaround khi Cottontail bản mới hơn bundle fix từ oven-sh/bun#35505 (merged 2026-08-24, tự tách component offset thay vì gọi `Date.parse`). Chưa biết Cottontail bản nào bundle Bun >= 1.4.2 — Cottontail private, không tra được danh sách version. Nâng phải nâng cả `hutch` lẫn `cottontail` trong `hutch.config.ts`, vì `cottontail=0.7.1` đang pin và cũng là default của hutch 0.27.1
-  - Side effect đã biết: `now()::timestamp` và `to_char(now(), ...)` trả giờ +05:45 thay vì giờ server. Ô `timestamptz` trong grid không đổi vì đã ép về UTC. Nếu profile tự set `timezone` trong `urlParams` thì giá trị đó thắng — kể cả `+09:00`, và `timestamptz` sẽ null lại
+  - Side effect đã biết: `now()::timestamp` và `to_char(now(), ...)` trả giờ +05:45 thay vì giờ server. Ô `timestamptz` trong grid không còn phụ thuộc workaround này: nó đọc qua text rồi renderer đổi sang +07, nên session timezone lệch múi nào cũng hiện đúng. Nếu profile tự set `timezone` trong `urlParams` thì giá trị đó thắng
+
+- [ ] Grid thiếu microsecond: Bun decode `timestamptz`/`timestamp` thành `Date` nên cắt còn ms. Giờ đọc 2 cột đó qua text: `to_jsonb(col) #>> '{}'` cho `timestamptz`, `::text` cho `timestamp` (`textFidelitySql` trong `src/bun/drivers/postgres.ts`), renderer gắn `+07` và giữ nguyên phần microsecond (code xong, chờ test trong app)
+  - Probe tên cột giờ chỉ đọc plan (`LIMIT 0`), trước đây chạy body thật thêm 1 lần cho mỗi statement
+  - Chỉ áp cho statement đọc. `INSERT/UPDATE ... RETURNING`, `EXPLAIN`, câu bị probe từ chối (trùng tên cột), và MySQL vẫn đi đường cũ (ms)
+  - `date` giữ nguyên `2026-01-01T00:00:00.000Z`, chưa đụng vì không liên quan microsecond
 
 Phase 14:
 - Sum selection skip mọi số valid

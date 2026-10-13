@@ -21,6 +21,7 @@ import {
 	planObject,
 	planText,
 	wrapForColumnTypeProbePlanOnly,
+	wrapForResulting,
 } from "../driver";
 
 /**
@@ -40,8 +41,10 @@ import {
  *
  * This is a workaround, not a fix. It shifts the session timezone, so
  * `now()::timestamp` and `to_char(now(), ...)` report +05:45 rather than the
- * server default. `timestamptz` cells in the grid are unaffected — the driver
- * normalises them to UTC before they leave the Bun side.
+ * server default. Grid `timestamptz` cells no longer depend on it: they are
+ * read as text (see `textFidelitySql`) and never pass through the broken
+ * decode, which is also what keeps their microseconds. The forced offset still
+ * protects every path that does let Bun decode a `timestamptz` itself.
  *
  * Remove once Cottontail bundles the fix from oven-sh/bun#35505, which parses
  * the offset components itself instead of calling `Date.parse`.
@@ -571,6 +574,55 @@ export const postgresDriver: Driver = {
 		} catch {
 			return [];
 		}
+	},
+
+	/**
+	 * Bun decodes `timestamptz` and `timestamp` (without time zone) OIDs to a
+	 * JS `Date`, which holds milliseconds only, so a stored `.123456` reaches
+	 * the grid as `.123`. No query or connection option disables that decode, so
+	 * the server's own text form is the only microsecond-bearing shape available
+	 * and the column is re-read through a cast.
+	 *
+	 * `timestamptz` goes through `to_jsonb(...) #>> '{}'`, which yields ISO text
+	 * with an explicit numeric offset (e.g.
+	 * `2026-01-01T06:15:00.123456-05:45`, the session zone) and so survives
+	 * `Date.parse`; `timestamp` needs no zone, so `::text` is enough. `date`,
+	 * `time`, arrays of temporal types and domains round-trip exactly (or decode
+	 * to a `Date` only at day/second granularity), so they are left alone —
+	 * touching them would change their value shape for no gain.
+	 */
+	textFidelitySql(
+		sql: string,
+		columns: string[],
+		types: string[],
+	): string | null {
+		if (columns.length === 0) return null;
+		// Duplicate output names make `recall_cast."id"` ambiguous, so the
+		// projection cannot be built; the statement runs as written.
+		const seen = new Set<string>();
+		for (const column of columns) {
+			if (seen.has(column)) return null;
+			seen.add(column);
+		}
+
+		let casts = false;
+		const projected = wrapForResulting(
+			sql,
+			columns,
+			(column, type) => {
+				if (type === "timestamp with time zone") {
+					casts = true;
+					return `to_jsonb(${column}) #>> '{}'`;
+				}
+				if (type === "timestamp without time zone") {
+					casts = true;
+					return `${column}::text`;
+				}
+				return null;
+			},
+			types,
+		);
+		return casts ? projected : null;
 	},
 
 	async explain(db: SQL, sql: string): Promise<ExplainPlan> {

@@ -101,6 +101,27 @@ export interface Driver {
 		columns: string[],
 	): Promise<string[]>;
 	/**
+	 * Rewrite a read statement so columns a decode would round are read as text
+	 * instead, or return null when nothing needs casting.
+	 *
+	 * Postgres is the reason this exists: `Bun.SQL` decodes `timestamptz` and
+	 * `timestamp` OIDs into a `Date`, which keeps only milliseconds, so a
+	 * stored `.123456` reaches the grid as `.123`. There is no per-query or
+	 * connection switch to turn that decode off, so the server's own text form —
+	 * asked for with a cast — is the only microsecond-preserving shape reachable
+	 * through this runtime. `columns` and `types` are parallel; `types` are the
+	 * `pg_typeof` names from {@link columnTypes}.
+	 *
+	 * Returns null when no column needs a cast, when `columns` is empty, or when
+	 * the projection cannot be expressed (duplicate output names); the caller
+	 * then runs the statement as written.
+	 */
+	textFidelitySql?(
+		sql: string,
+		columns: string[],
+		types: string[],
+	): string | null;
+	/**
 	 * The execution plan for one statement, as a normalised node tree.
 	 *
 	 * Estimate only, by design: both engines answer `EXPLAIN` without running
@@ -507,15 +528,51 @@ function matchDollarTag(sql: string, start: number): string | null {
  * query's column names. A plain `LIMIT 0` would return no rows at all, and
  * `Bun.SQL` exposes rows but no result metadata, so the keys of a returned row
  * are the only portable source of column names.
+ *
+ * The inner `LIMIT 0` makes the probe plan-only: Postgres fixes a subquery's
+ * output columns at plan time, so the seed row is answered from the plan and
+ * the body never runs. Without it the `LEFT JOIN` really did evaluate the
+ * statement, so probing a large `SELECT` ran it an extra time purely to learn
+ * its column names.
  */
 export function wrapForColumnProbe(sql: string): string {
 	const body = sql.trim().replace(/;\s*$/, "");
 	return (
 		`SELECT recall_column_probe.* FROM (SELECT 1 AS recall_seed) AS recall_seed_row ` +
-		`LEFT JOIN (${body}) AS recall_column_probe ON true`
+		`LEFT JOIN (SELECT * FROM (${body}) AS recall_planned LIMIT 0) AS recall_column_probe ON true`
 	);
 }
 
+/**
+ * Wrap a read statement so each output column is re-read through a projected
+ * expression, keeping the statement's own names, order and aliases.
+ *
+ * `project` is asked once per column with the qualified, quoted reference to
+ * that column (e.g. `recall_cast."created_at"`) and its declared type; the
+ * expression it returns is emitted under the column's original name, or the
+ * plain quoted reference is used when it returns null. That is how a caller
+ * casts a column away from a decode it cannot trust without disturbing any
+ * column it leaves alone. A body with duplicate output names cannot be
+ * projected column-by-column, so the caller must reject it (see
+ * `textFidelitySql`).
+ */
+export function wrapForResulting(
+	sql: string,
+	columns: string[],
+	project: (column: string, type: string) => string | null,
+	types: string[] = [],
+): string {
+	const body = sql.trim().replace(/;\s*$/, "");
+	const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
+	const projection = columns
+		.map((column, index) => {
+			const ref = `recall_cast.${quote(column)}`;
+			const expr = project(ref, types[index] ?? "") ?? ref;
+			return `${expr} AS ${quote(column)}`;
+		})
+		.join(", ");
+	return `SELECT ${projection} FROM (${body}) AS recall_cast`;
+}
 
 /**
  * Wrap a read statement so each output column reports its declared type.

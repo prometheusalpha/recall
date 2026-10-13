@@ -15,6 +15,7 @@ import {
 	columnTypeName,
 	countTableRows,
 	driverFor,
+	isReadStatement,
 	normalizeBackendError,
 	probeStatementColumns,
 	splitStatements,
@@ -164,26 +165,65 @@ async function runStatement(
 		error: null,
 	});
 
-	const query = db.unsafe(statement);
-	executions.set(executionId, query);
+	const queryError = (error: unknown): StatementResult => ({
+		statementIndex,
+		sql: statement,
+		columns: [],
+		columnTypes: [],
+		rows: [],
+		affectedRows: 0,
+		executionTimeMs: performance.now() - startedAt,
+		truncated: false,
+		error: normalizeBackendError(error, statement),
+	});
+
+	// Register the live query so `cancelQuery` can interrupt it, and always
+	// await inside the try so a rejection cannot escape unhandled.
+	const run = async (sql: string): Promise<unknown> => {
+		const query = db.unsafe(sql);
+		executions.set(executionId, query);
+		try {
+			return await query;
+		} finally {
+			if (executions.get(executionId) === query) executions.delete(executionId);
+		}
+	};
+
+	// A read's projection has to be part of the one execution — a cast cannot
+	// be applied after the fact — so the column names, and with them the
+	// declared types, are probed before the statement runs. Both probes read
+	// the plan only; neither executes the body.
+	let columns: string[] = [];
+	let declaredTypes: string[] = [];
+	let typed = false;
+	if (isReadStatement(statement)) {
+		columns = await probeStatementColumns(db, statement);
+		if (columns.length > 0) {
+			declaredTypes = await driver.columnTypes(db, statement, columns);
+			typed = true;
+		}
+	}
+
+	const projected = driver.textFidelitySql?.(
+		statement,
+		columns,
+		declaredTypes,
+	);
 
 	let fetched: unknown;
 	try {
-		fetched = await query;
+		fetched = await run(projected ?? statement);
 	} catch (error) {
-		return {
-			statementIndex,
-			sql: statement,
-			columns: [],
-			columnTypes: [],
-			rows: [],
-			affectedRows: 0,
-			executionTimeMs: performance.now() - startedAt,
-			truncated: false,
-			error: normalizeBackendError(error, statement),
-		};
-	} finally {
-		if (executions.get(executionId) === query) executions.delete(executionId);
+		if (projected == null) return queryError(error);
+		// The projection is SQL the user never wrote, so a body it cannot express
+		// (or a server that rejects the cast) must behave exactly as today: run
+		// the statement as written, keeping the declared types the probe already
+		// answered. A genuine SQL error in the body fails both runs.
+		try {
+			fetched = await run(statement);
+		} catch (retryError) {
+			return queryError(retryError);
+		}
 	}
 
 	if (!Array.isArray(fetched)) {
@@ -191,17 +231,19 @@ async function runStatement(
 	}
 
 	const records = fetched as Array<Record<string, unknown>>;
-	// A read with no rows still needs headers; the probe plans the statement and
-	// yields its column names without running the body a second time.
-	const columns =
-		records.length > 0
-			? Object.keys(records[0])
-			: await probeStatementColumns(db, statement);
+	// No probe answer: fall back to the keys of the returned row, and derive the
+	// types from the values as before.
+	if (columns.length === 0) {
+		columns = records.length > 0 ? Object.keys(records[0]) : [];
+	}
 	// The declared type is asked of the server: a value-derived type calls both
 	// `timestamptz` and `timestamp without time zone` a `Date`, and only the
 	// first is an instant the grid may re-render into the display timezone. An
-	// empty probe answer falls back to the old value-derived guess.
-	const declaredTypes = await driver.columnTypes(db, statement, columns);
+	// exact probe leaves a column it could not type empty, so the shell falls
+	// back to the value-derived guess for that column alone.
+	if (!typed && columns.length > 0) {
+		declaredTypes = await driver.columnTypes(db, statement, columns);
+	}
 	const capped = maxRows > 0 ? records.slice(0, maxRows) : records;
 	const rows = capped.map((record) =>
 		columns.map((column) => toJsonSafe(record[column])),
