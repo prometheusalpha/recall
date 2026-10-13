@@ -11,7 +11,7 @@
  * a half-typed clause never reaches the server mid-word.
  */
 import { computed, ref, watch } from "vue";
-import { ArrowUpDown, Filter, TriangleAlert, X } from "lucide-vue-next";
+import { ArrowUpDown, Check, Filter, Minus, TriangleAlert, X } from "lucide-vue-next";
 import type { BackendError } from "../../../shared/types";
 import { Button } from "../ui/button";
 import ClauseSuggestInput from "./ClauseSuggestInput.vue";
@@ -19,7 +19,6 @@ import {
 	DropdownMenu,
 	DropdownMenuCheckboxItem,
 	DropdownMenuContent,
-	DropdownMenuItem,
 	DropdownMenuLabel,
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
@@ -99,6 +98,21 @@ defineExpose({ focusWhere });
 const hiddenCount = computed(
 	() => props.columns.length - props.visibleColumns.length,
 );
+
+/**
+ * The all-row has three states, and `reka` reads the middle one off the same
+ * `modelValue` prop as a string, which is why the template passes
+ * `"indeterminate"` rather than a second prop.
+ */
+const allVisible = computed(() => hiddenCount.value === 0);
+const someHidden = computed(
+	() => hiddenCount.value > 0 && hiddenCount.value < props.columns.length,
+);
+
+/** The all-row writes the whole list at once, still in the statement's order. */
+function setAllColumns(visible: boolean): void {
+	emit("update:visibleColumns", visible ? [...props.columns] : []);
+}
 
 /**
  * Toggling never reorders: the emit is rebuilt from `columns`, so the grid keeps
@@ -272,23 +286,80 @@ function commit(): void {
 					</span>
 				</Button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" class="max-h-80 overflow-y-auto">
+			<!-- Wide enough for the column names rather than the trigger: the
+			     shared content width is the trigger's, which cut long names off
+			     at the button's few characters. `w-max` grows to the longest
+			     name, capped by the space the popper reports. -->
+			<DropdownMenuContent
+				align="end"
+				class="max-h-80 w-max min-w-56 max-w-[min(32rem,var(--reka-dropdown-menu-content-available-width))] overflow-y-auto"
+			>
 				<DropdownMenuLabel>Columns</DropdownMenuLabel>
+				<!-- The menu stays open across a tick (`@select.prevent`), so
+				     hiding five columns is five clicks and not five reopens.
+				     `reka` closes on select by default, and a list that closes
+				     under the pointer is what a checkbox list must not do. -->
+				<DropdownMenuCheckboxItem
+					:model-value="allVisible ? true : someHidden ? 'indeterminate' : false"
+					class="pr-1.5"
+					@select.prevent
+					@update:model-value="setAllColumns"
+				>
+					<!-- Empty, not absent: `reka` appends its own tick on the right,
+					     and the tick this row draws on the left is the only one. -->
+					<template #indicator-icon><span /></template>
+					<span
+						class="flex size-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+						:class="allVisible ? 'border-primary bg-primary' : 'border-input'"
+					>
+						<!-- `stroke`, not `text`: the item paints every descendant
+						     `accent-foreground` on focus, and that is the same
+						     near-black as the filled box in the light theme. -->
+						<Check
+							v-if="allVisible"
+							class="size-2.5 stroke-primary-foreground"
+							aria-hidden="true"
+						/>
+						<!-- The dash sits in an *unfilled* box, so it takes the box's
+						     own colour rather than the filled box's tick colour. -->
+						<Minus
+							v-else-if="someHidden"
+							class="size-2.5 stroke-foreground"
+							aria-hidden="true"
+						/>
+					</span>
+					<span class="truncate">All columns</span>
+				</DropdownMenuCheckboxItem>
+				<DropdownMenuSeparator />
 				<DropdownMenuCheckboxItem
 					v-for="column in columns"
 					:key="column"
 					:model-value="visibleColumns.includes(column)"
+					class="pr-1.5"
+					@select.prevent
 					@update:model-value="toggleColumn(column, $event)"
 				>
-					{{ column }}
+					<!-- Empty, not absent: `reka` appends its own tick on the right,
+					     and the tick this row draws on the left is the only one. -->
+					<template #indicator-icon><span /></template>
+					<span
+						class="flex size-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+						:class="
+							visibleColumns.includes(column)
+								? 'border-primary bg-primary'
+								: 'border-input'
+						"
+					>
+						<Check
+							v-if="visibleColumns.includes(column)"
+							class="size-2.5 stroke-primary-foreground"
+							aria-hidden="true"
+						/>
+					</span>
+					<!-- Past the cap the name is ellipsised, so the full name
+					     stays one hover away. -->
+					<span class="truncate" :title="column">{{ column }}</span>
 				</DropdownMenuCheckboxItem>
-				<DropdownMenuSeparator />
-				<DropdownMenuItem
-					:disabled="hiddenCount === 0"
-					@select="emit('update:visibleColumns', [...columns])"
-				>
-					Show all
-				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
 	</div>

@@ -185,12 +185,12 @@ const emit = defineEmits<{
 	export: [format: "csv" | "json"];
 	"update:where": [value: string];
 	"update:orderBy": [value: string];
-	/**
-	 * The caller wants the columns still visible. The filter bar reasons in
-	 * terms of the visible list, the workspace owns the hidden set, so this is
-	 * where one is turned into the other.
-	 */
-	"update:visibleColumns": [columns: string[]];
+    /**
+     * The caller wants the columns still visible. Both the filter bar and the
+     * workspace reason in the visible list — the workspace derives the hidden set
+     * this grid renders from — so the payload is forwarded as it arrives.
+     */
+    "update:visibleColumns": [columns: string[]];
 	/** Enter in either filter field: re-run the statement with the new filter. */
 	applyFilter: [];
 	/**
@@ -310,23 +310,6 @@ const columns = computed(() => {
 	return [...kept, ...visible.filter((name) => !placed.has(name))];
 });
 
-/**
- * The filter bar ticks columns off its own list; the workspace stores the
- * hidden set. Converting here rather than in either of them keeps a single
- * source of truth for visibility — this grid already renders from
- * `hiddenColumns`, so a second copy would let the menu and the grid disagree.
- *
- * An empty `next` is a legitimate request (hide everything), not a mistake, so
- * only a non-array is dropped.
- */
-function onVisibleColumnsChange(next: string[]): void {
-	if (!Array.isArray(next)) return;
-	const visible = new Set(next);
-	emit(
-		"update:visibleColumns",
-		props.result.columns.filter((name) => !visible.has(name)),
-	);
-}
 /** Result index of each rendered column, so selection survives hiding columns. */
 const columnIndexes = computed(() =>
 	columns.value.map((name) => props.result.columns.indexOf(name)),
@@ -1915,7 +1898,7 @@ function rowKey(_row: unknown, index: number): number {
 				:error-target="clauseError?.target ?? null"
 				@update:where="(value) => emit('update:where', value)"
 				@update:order-by="(value) => emit('update:orderBy', value)"
-				@update:visible-columns="onVisibleColumnsChange"
+				@update:visible-columns="(next) => emit('update:visibleColumns', next)"
 				@apply="emit('applyFilter')"
 			/>
 
