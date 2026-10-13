@@ -163,6 +163,6 @@
 	]
 }
 	},
-	"include": ["src", "env.d.ts"],
+	"include": ["src", "tests", "env.d.ts"],
 	"exclude": ["node_modules", "dist", "build"]
 }

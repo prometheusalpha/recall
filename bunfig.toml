@@ -1,0 +1,4 @@
+# Tests live in tests/. Pinning the root keeps a bare `bun test` from scanning
+# src, dist and build on its way to the same files.
+[test]
+root = "./tests"
