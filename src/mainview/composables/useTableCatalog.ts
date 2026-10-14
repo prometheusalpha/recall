@@ -93,7 +93,7 @@ const CATALOG_TTL_MS = 5 * 60_000;
  * being read. Schemas share their database's session, so they are not capped at
  * all.
  */
-const MAX_CONCURRENT_DATABASES = 4;
+const MAX_CONCURRENT_DATABASES = 10;
 
 /**
  * Cache key for one (database, schema), length-prefixed as
