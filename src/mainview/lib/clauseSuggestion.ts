@@ -14,7 +14,7 @@
  */
 import type { DatabaseType } from "../../shared/types";
 import { matchFuzzy } from "./fuzzy";
-import { codeMirrorSqlDialect } from "./sqlDialect";
+import { IDENTIFIER_QUOTES, MYSQL_KEYWORDS, POSTGRES_KEYWORDS } from "./sqlLexicon";
 
 /** The fragment a field edits: the grid appends these to the statement. */
 export type ClauseKind = "where" | "orderBy";
@@ -81,12 +81,13 @@ const BARE_IDENTIFIER: Record<DatabaseType, RegExp> = {
 };
 
 /**
- * The quote each dialect writes around an identifier it cannot take bare, and
- * reads back when the user quoted one themselves.
+ * The dialect's own word list. A bare identifier whose spelling is a keyword
+ * parses as the keyword, so this decides the half of the quoting rule that
+ * `BARE_IDENTIFIER` cannot.
  */
-export const IDENTIFIER_QUOTES: Record<DatabaseType, string> = {
-	postgres: '"',
-	mysql: "`",
+const KEYWORDS: Record<DatabaseType, string> = {
+	postgres: POSTGRES_KEYWORDS,
+	mysql: MYSQL_KEYWORDS,
 };
 
 interface ActiveQuote {
@@ -105,9 +106,8 @@ const reservedWordCache = new Map<DatabaseType, ReadonlySet<string>>();
 function reservedWords(dbType: DatabaseType): ReadonlySet<string> {
 	const cached = reservedWordCache.get(dbType);
 	if (cached !== undefined) return cached;
-	const declared = codeMirrorSqlDialect(dbType).spec.keywords ?? "";
 	const words = new Set(
-		declared
+		KEYWORDS[dbType]
 			.split(/\s+/)
 			.filter((word) => word !== "")
 			.map((word) => word.toLowerCase()),

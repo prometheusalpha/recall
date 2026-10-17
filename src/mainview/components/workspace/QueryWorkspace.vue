@@ -569,17 +569,6 @@ const tableResult = computed(() => {
 });
 
 /**
- * How Bun names a statement the parser rejected: the driver is the prefix, not
- * the code itself, so both engines end in this. Measured, not assumed —
- * Postgres sends `ERR_POSTGRES_SYNTAX_ERROR`, MariaDB `ERR_MYSQL_SYNTAX_ERROR`.
- *
- * Only this class keeps the grid, because only this class is the filter band's
- * own doing. A rejected clause that is not a parse error — an unknown column,
- * say — is reported as a server error, and lands in the pane with Retry.
- */
-const SYNTAX_ERROR_SUFFIX = "_SYNTAX_ERROR";
-
-/**
  * The last table result that loaded, per tab.
  *
  * A run replaces the tab's result, and the filter band lives inside the grid —
@@ -618,8 +607,30 @@ const clauseErrorTarget = computed<"where" | "orderBy" | null>(() => {
 });
 
 /**
- * The clause failure the grid is still sitting on, if any. Null as soon as a
- * run succeeds, which is what takes the card down and un-dims the rows.
+ * Whether the connection behind the tab is known to be gone.
+ *
+ * A dead socket fails every statement it is handed, clause or not, so its
+ * failures say nothing about the clause: `markLost` settles the status when the
+ * backend sees the socket die, and the toast it raises carries the reconnect.
+ * Only the two settled states count — `connecting` is a run nothing has
+ * rejected yet.
+ */
+const connectionLost = computed(() => {
+	const id = activeTab.value?.connectionId;
+	if (id === undefined) return false;
+	const status = connectionsStore.status[id];
+	return status === "disconnected" || status === "error";
+});
+
+/**
+ * The clause failure the grid is still sitting on, if any.
+ *
+ * Any rejection with a clause set counts, not only the parse errors the engine
+ * names after the parser. The clause is the only part of the generated
+ * statement the user wrote, so an unknown column, an unparsable fragment or a
+ * literal the column type refuses are all theirs to fix — in the band, which is
+ * the one place the fix can be typed. Null as soon as a run succeeds, which is
+ * what takes the card down and un-dims the rows.
  */
 const tableClauseError = computed<{
 	error: BackendError;
@@ -627,24 +638,30 @@ const tableClauseError = computed<{
 } | null>(() => {
 	const error = activeResult.value?.error;
 	if (!error || !isTableTab.value) return null;
-	if (!error.code.endsWith(SYNTAX_ERROR_SUFFIX)) return null;
 	// A generated statement carries nothing the user typed unless a clause is
 	// set, so a rejection with both boxes empty is a bug of ours, not a typo.
 	if (activeWhere.value.trim() === "" && activeOrderBy.value.trim() === "") {
 		return null;
 	}
+	if (connectionLost.value) return null;
 	return { error, target: clauseErrorTarget.value };
 });
 
 /**
- * What the grid renders. A rejected clause keeps the previous rows under the
- * card: they are the last state of the table the user can still read, and the
- * band above them is where the typo gets fixed.
+ * What the grid renders.
+ *
+ * A rejected clause keeps the previous rows under the band: they are the last
+ * state of the table the user can still read, and the band above them is where
+ * the typo gets fixed. With nothing loaded yet there is no row to keep, so the
+ * grid falls back to the failed result and reports it in its own pane — under
+ * the same band, which never leaves.
  */
-const tableGridResult = computed(
-	() =>
-		tableResult.value ?? (tableClauseError.value ? activeLastGoodResult.value : null),
-);
+const tableGridResult = computed(() => {
+	const loaded = tableResult.value;
+	if (loaded) return loaded;
+	if (tableClauseError.value === null) return activeResult.value;
+	return activeLastGoodResult.value ?? activeResult.value;
+});
 
 /** Loading until a run has been attempted and has settled. */
 const tableLoading = computed(
@@ -879,6 +896,7 @@ async function reconnectActive(): Promise<void> {
 					@update:page="onPageChange"
 					@update:page-size="onPageSizeChange"
 					@count="countActiveTable"
+					@reconnect="reconnectActive"
 					@rerun="rerunActive"
 					@sort="onGridSort"
 					@update:visible-columns="setVisibleColumns"

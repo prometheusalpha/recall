@@ -213,6 +213,16 @@ const emit = defineEmits<{
 }>();
 
 const error = computed(() => props.result.error);
+
+/**
+ * The failure the band's card shows. The pane prints the same message when it
+ * is up, and two copies of one sentence is noise — but the mark on the field
+ * stays, because pointing at the clause is the part only the band can do.
+ */
+const bandError = computed(() =>
+	error.value ? null : (props.clauseError?.error ?? null),
+);
+
 const rows = computed(() => props.result.rows);
 
 /**
@@ -1856,6 +1866,30 @@ function rowKey(_row: unknown, index: number): number {
 		class="relative flex h-full min-h-0 flex-1 flex-col"
 		data-slot="result-grid"
 	>
+		<!--
+		     The band comes first, and renders through every failure this pane can
+		     report: it holds the clause, so it is the one place a rejected clause
+		     can be fixed. A failure pane that replaced it left nothing but a
+		     Retry that replays the same broken statement.
+		-->
+		<ResultFilterBar
+			ref="filterBarEl"
+			:where="where"
+			:order-by="orderBy"
+			:sortable="filterable"
+			:busy="busy"
+			:columns="result.columns"
+			:column-types="result.columnTypes"
+			:db-type="dbType"
+			:visible-columns="columns"
+			:error="bandError"
+			:error-target="clauseError?.target ?? null"
+			@update:where="(value) => emit('update:where', value)"
+			@update:order-by="(value) => emit('update:orderBy', value)"
+			@update:visible-columns="(next) => emit('update:visibleColumns', next)"
+			@apply="emit('applyFilter')"
+		/>
+
 		<!-- Failure: the message, its code and where the server said it is. -->
 		<div
 			v-if="error"
@@ -1890,23 +1924,6 @@ function rowKey(_row: unknown, index: number): number {
 		</div>
 
 		<template v-else>
-			<ResultFilterBar
-				ref="filterBarEl"
-				:where="where"
-				:order-by="orderBy"
-				:sortable="filterable"
-				:busy="busy"
-				:columns="result.columns"
-				:column-types="result.columnTypes"
-				:db-type="dbType"
-				:visible-columns="columns"
-				:error="clauseError?.error ?? null"
-				:error-target="clauseError?.target ?? null"
-				@update:where="(value) => emit('update:where', value)"
-				@update:order-by="(value) => emit('update:orderBy', value)"
-				@update:visible-columns="(next) => emit('update:visibleColumns', next)"
-				@apply="emit('applyFilter')"
-			/>
 
 		<!--
 		     The header scrolls horizontally on its own, above a body that

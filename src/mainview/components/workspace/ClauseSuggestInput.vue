@@ -30,9 +30,9 @@ import {
 	clausePick,
 	clauseRole,
 	clauseTarget,
-	IDENTIFIER_QUOTES,
 	type ClauseKind,
 } from "../../lib/clauseSuggestion";
+import { IDENTIFIER_QUOTES } from "../../lib/sqlLexicon";
 
 /** A result set is a projection, so the list is bounded by the column count. */
 const MAX_SUGGESTIONS = 200;
