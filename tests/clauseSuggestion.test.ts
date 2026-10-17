@@ -148,13 +148,40 @@ describe("clauseFieldSuggestions", () => {
 		expect(rows.map((row) => row.column)).toEqual(["customer_id", "category_id"]);
 	});
 
-	test("falls back to the full list when nothing matches", () => {
+	test("offers nothing when no column matches the token", () => {
 		const rows = clauseFieldSuggestions({
 			columns: ["alpha", "beta"],
 			token: "zzz",
 			quotedIdentifier: false,
 		});
-		expect(rows.map((row) => row.column)).toEqual(["alpha", "beta"]);
+		expect(rows).toEqual([]);
+	});
+
+	test("offers nothing for the number being typed after a comparison", () => {
+		// `lifetime_spent > 10` with the caret at the end: `10` is the operand,
+		// and a column list here is what made Enter replace it.
+		const value = "lifetime_spent > 10";
+		const target = clauseTarget("where", value, value.length, value.length, POSTGRES_QUOTE);
+		expect(target.token).toBe("10");
+		expect(
+			clauseFieldSuggestions({
+				columns: ["lifetime_spent", "user_id"],
+				token: target.token,
+				quotedIdentifier: target.quotedIdentifier,
+			}),
+		).toEqual([]);
+	});
+
+	test("offers nothing for a literal the caret sits right after", () => {
+		const value = "name = 'Alice'";
+		const target = clauseTarget("where", value, value.length, value.length, POSTGRES_QUOTE);
+		expect(
+			clauseFieldSuggestions({
+				columns: ["id", "name"],
+				token: target.token,
+				quotedIdentifier: target.quotedIdentifier,
+			}),
+		).toEqual([]);
 	});
 
 	test("lists every column, in order, for an empty token", () => {

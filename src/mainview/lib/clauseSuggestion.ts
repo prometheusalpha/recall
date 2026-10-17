@@ -271,10 +271,12 @@ export function clauseConnectors(token: string): string[] {
 /**
  * Columns for the token at the caret, best match first.
  *
- * A token that matches nothing falls back to the full list rather than an empty
- * box: no match usually means the user is mid-word, and an empty list would look
- * like a broken field. A token that IS a column ends the list instead — the name
- * is complete, and what follows is an operator.
+ * A token no column matches gets an empty list rather than every column. A
+ * number or a literal is the operand the user is in the middle of writing, and
+ * a full-list fallback there is what made Enter — the keystroke that applies
+ * the clause — look like it had rewritten the value. A token that IS a column
+ * ends the list for the same reason: the name is complete, and what follows is
+ * an operator.
  */
 export function clauseFieldSuggestions(
 	options: ClauseFieldSuggestionOptions,
@@ -298,12 +300,8 @@ export function clauseFieldSuggestions(
 	scored.sort(
 		(left, right) => left.score - right.score || left.index - right.index,
 	);
-	const ranked =
-		scored.length > 0
-			? scored
-			: columns.map((column, position) => ({ column, score: 0, index: position }));
 
-	return ranked.map((entry) => ({
+	return scored.map((entry) => ({
 		column: entry.column,
 		// Inside quotes the name is already delimited, so the quotes survive
 		// whatever the dialect would have added.

@@ -15,6 +15,10 @@
  * nothing inside a quoted value, where the operand is the user's own text. All
  * of that reading lives in `lib/clauseSuggestion`, which keeps this file about
  * the input, the list and the keyboard.
+ *
+ * Enter runs the clause, as it does anywhere else in this band; Tab or a click
+ * accepts a row. Completion never shares a keystroke with the commit, so a list
+ * sitting under the field can never rewrite the fragment being applied.
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { Component } from "vue";
@@ -285,16 +289,20 @@ function onKeydown(event: KeyboardEvent): void {
 			event.preventDefault();
 			close();
 			return;
-		case "Enter": {
+		case "Tab": {
 			const row = open.value ? rows.value[activeIndex.value] : undefined;
-			if (row === undefined) {
-				emit("submit");
-				return;
-			}
+			if (row === undefined) return;
+			// Tab completes. Enter belongs to the clause: it runs the filter, so
+			// no suggestion can ever be applied by the keystroke that applies
+			// the fragment, however the list happens to be sitting under it.
 			event.preventDefault();
 			pick(row);
 			return;
 		}
+		case "Enter":
+			event.preventDefault();
+			emit("submit");
+			return;
 	}
 }
 
