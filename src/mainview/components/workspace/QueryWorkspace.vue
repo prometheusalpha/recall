@@ -131,6 +131,19 @@ const activeTab = computed(() => tabsStore.activeTab);
 const tabId = computed(() => activeTab.value?.id ?? null);
 const isTableTab = computed(() => activeTab.value?.mode === "table");
 
+/**
+ * Dialect of the connection this tab is on, for the two clause fields: they
+ * insert a column name, and whether that name needs quoting is a dialect
+ * question. Undefined until the connection config is in, which leaves every
+ * name bare.
+ */
+const activeDbType = computed(
+	() =>
+		connectionsStore.configs.find(
+			(entry) => entry.id === activeTab.value?.connectionId,
+		)?.dbType,
+);
+
 const statements = computed(() =>
 	tabId.value ? (queryStore.results[tabId.value] ?? []) : [],
 );
@@ -853,6 +866,7 @@ async function reconnectActive(): Promise<void> {
 					:insert-target="insertTarget"
 					:busy="isRunning"
 					:filterable="isTableTab"
+					:db-type="activeDbType"
 					:hidden-columns="activeHiddenColumns"
 					:where="activeWhere"
 					:order-by="activeOrderBy"

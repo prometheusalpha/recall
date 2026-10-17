@@ -9,25 +9,41 @@
  * structured builder — the user needs operators, quotes and functions the
  * builder has no vocabulary for. What the builder did give them is the column
  * name, and typing `na` to find `name` is exactly the friction worth removing.
- * Hence the token shell plus a prefix-filtered suggestion list that inserts the
- * name into the text and leaves the rest of the fragment to the user.
+ *
+ * The list therefore follows the caret through the fragment: it offers columns
+ * where a field belongs, `AND`/`OR` once the expression is complete, and
+ * nothing inside a quoted value, where the operand is the user's own text. All
+ * of that reading lives in `lib/clauseSuggestion`, which keeps this file about
+ * the input, the list and the keyboard.
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { Component } from "vue";
 import { ChevronDown, X } from "lucide-vue-next";
-
-/**
- * The run being completed is the identifier at the very end of the text, not
- * the whole string: `id = '73ba…'` ends mid-literal and its last identifier is
- * whatever the user is typing, not the clause around it.
- */
-const LAST_IDENTIFIER = /[A-Za-z0-9_$]+$/;
+import type { DatabaseType } from "../../../shared/types";
+import {
+	clauseConnectors,
+	clauseFieldSuggestions,
+	clausePick,
+	clauseRole,
+	clauseTarget,
+	IDENTIFIER_QUOTES,
+	type ClauseKind,
+} from "../../lib/clauseSuggestion";
 
 /** A result set is a projection, so the list is bounded by the column count. */
 const MAX_SUGGESTIONS = 200;
 
+/** One row of the list: what it writes, and the type shown beside the name. */
+interface SuggestionRow {
+	value: string;
+	insertText: string;
+	detail: string;
+}
+
 const props = withDefaults(
 	defineProps<{
+		/** `where` can also offer connectors; `orderBy` is a field list. */
+		kind: ClauseKind;
 		/** Accent token shown left of the text: "WHERE" or "ORDER BY". */
 		label: string;
 		/** Lucide icon component for the left slot. */
@@ -40,12 +56,22 @@ const props = withDefaults(
 		columns: string[];
 		/** SQL type per column, parallel to `columns`. Row's secondary text. */
 		columnTypes: string[];
+		/**
+		 * Connection dialect, so a name the dialect cannot take bare is inserted
+		 * quoted. Undefined leaves every name bare.
+		 */
+		dbType?: DatabaseType;
 		/** Emitted on every accepted suggestion, so the parent can apply. */
 		commitOnPick?: boolean;
 		/** The last run was rejected at this clause, so the frame turns red. */
 		invalid?: boolean;
 	}>(),
-	{ columns: () => [], columnTypes: () => [], commitOnPick: false, invalid: false },
+	{
+		columns: () => [],
+		columnTypes: () => [],
+		commitOnPick: false,
+		invalid: false,
+	},
 );
 
 const emit = defineEmits<{
@@ -75,30 +101,61 @@ const frame = computed(() =>
 			: "",
 );
 
-/** What the user has typed of the identifier under the caret, lowercased. */
-const typedToken = computed(() => {
-	const match = LAST_IDENTIFIER.exec(props.modelValue);
-	return match === null ? "" : match[0].toLowerCase();
-});
-
 /**
- * Prefix matches on the trailing identifier only. A token that matches nothing
- * falls back to the full list rather than an empty box: no match usually means
- * the user is mid-word, and an empty list would look like a broken field.
+ * The caret, mirrored from the element on every event that can move it. The
+ * list reads the fragment where the user is typing, which is not always the end
+ * of the value.
  */
-const suggestions = computed(() => {
-	const prefix = typedToken.value;
-	const hits = prefix
-		? props.columns.filter((name) => name.toLowerCase().startsWith(prefix))
-		: props.columns;
-	const rows = hits.length > 0 ? hits : props.columns;
-	return rows.slice(0, MAX_SUGGESTIONS);
-});
+const selection = ref({ start: 0, end: 0 });
+
+const identifierQuote = computed(() =>
+	props.dbType === undefined ? undefined : IDENTIFIER_QUOTES[props.dbType],
+);
 
 /** The declared type, when the caller supplied one for this column. */
 function typeOf(column: string): string {
 	return props.columnTypes[props.columns.indexOf(column)] ?? "";
 }
+
+/**
+ * The rows for a fragment and a caret. Takes them explicitly rather than off
+ * the props, because `onInput` runs before the parent has written the new value
+ * back, and a list built from the previous keystroke flickers behind the text.
+ */
+function rowsFor(value: string, start: number, end: number): SuggestionRow[] {
+	const target = clauseTarget(
+		props.kind,
+		value,
+		start,
+		end,
+		identifierQuote.value,
+	);
+	const role = clauseRole(props.kind, target);
+	if (role === "none") return [];
+	if (role === "connector") {
+		return clauseConnectors(target.token).map((keyword) => ({
+			value: keyword,
+			insertText: keyword,
+			detail: "",
+		}));
+	}
+	return clauseFieldSuggestions({
+		columns: props.columns,
+		token: target.token,
+		quotedIdentifier: target.quotedIdentifier,
+		dbType: props.dbType,
+	})
+		.slice(0, MAX_SUGGESTIONS)
+		.map((suggestion) => ({
+			value: suggestion.column,
+			insertText: suggestion.insertText,
+			detail: typeOf(suggestion.column),
+		}));
+}
+
+const rows = computed(() =>
+	rowsFor(props.modelValue, selection.value.start, selection.value.end),
+);
 
 function show(): void {
 	open.value = true;
@@ -118,33 +175,45 @@ function close(): void {
  * exactly the "user is asking for suggestions" signal — so every pick closed
  * the list and reopened it on the same tick, and the next click stacked a
  * second column name onto the clause. Focus on the next tick instead, behind a
- * flag that swallows that one `onFocus`.
+ * flag that swallows that one `onFocus`, and put the caret where the pick left
+ * off so the operator can be typed without reaching for the mouse.
  */
 let focusIsProgrammatic = false;
 
-function refocus(): void {
+function refocus(caret: number): void {
 	focusIsProgrammatic = true;
 	void nextTick(() => {
-		input.value?.focus();
+		const field = input.value;
+		if (field !== null) {
+			field.focus();
+			field.setSelectionRange(caret, caret);
+		}
+		selection.value = { start: caret, end: caret };
 		focusIsProgrammatic = false;
 	});
 }
 
 /**
- * Replaces the identifier being typed, or appends when the text ends in
- * punctuation or whitespace — which is what a fresh `WHERE ` is.
+ * Writes the row over the span the target covers. The caret follows the
+ * inserted name, so the operator can be typed without reaching for the mouse.
  */
-function pick(column: string): void {
+function pick(row: SuggestionRow): void {
 	const text = props.modelValue;
-	const match = LAST_IDENTIFIER.exec(text);
-	const next =
-		match === null ? `${text}${column} ` : `${text.slice(0, match.index)}${column}`;
-	emit("update:modelValue", next);
+	const field = input.value;
+	const start = field?.selectionStart ?? text.length;
+	const end = field?.selectionEnd ?? start;
+	const next = clausePick({
+		kind: props.kind,
+		value: text,
+		caret: start,
+		selectionEnd: end,
+		insertText: row.insertText,
+		identifierQuote: identifierQuote.value,
+	});
+	emit("update:modelValue", next.value);
 	close();
 	if (props.commitOnPick) emit("submit");
-	// A pick is a click, so the option button took focus; hand it back so the
-	// rest of the fragment can be typed without reaching for the mouse again.
-	refocus();
+	refocus(next.caret);
 }
 
 /** Clearing is an edit like any other, so it commits the same way Enter does. */
@@ -153,13 +222,30 @@ function clear(): void {
 	emit("submit");
 	// Same race as `pick`: an empty field that regains focus is the "show me
 	// suggestions" signal, so the flag has to cover this one too.
-	refocus();
+	refocus(0);
+}
+
+function syncSelection(): void {
+	const field = input.value;
+	if (field === null) return;
+	selection.value = {
+		start: field.selectionStart ?? 0,
+		end: field.selectionEnd ?? 0,
+	};
 }
 
 /** The input is fully controlled, so the value is read straight off the event. */
 function onInput(event: Event): void {
 	const target = event.target;
-	if (target instanceof HTMLInputElement) emit("update:modelValue", target.value);
+	if (!(target instanceof HTMLInputElement)) return;
+	syncSelection();
+	emit("update:modelValue", target.value);
+	// The list follows the fragment: it opens on the keystroke that gives it
+	// something to offer, and closes where there is nothing left to say — inside
+	// a quoted value, or on a half-typed connector.
+	open.value =
+		rowsFor(target.value, target.selectionStart ?? 0, target.selectionEnd ?? 0)
+			.length > 0;
 }
 
 /**
@@ -169,12 +255,13 @@ function onInput(event: Event): void {
  */
 function focusInput(): void {
 	input.value?.focus();
+	syncSelection();
 }
 
 defineExpose({ focus: focusInput });
 
 function move(step: number): void {
-	const total = suggestions.value.length;
+	const total = rows.value.length;
 	if (total === 0) return;
 	activeIndex.value = (activeIndex.value + step + total) % total;
 }
@@ -199,13 +286,13 @@ function onKeydown(event: KeyboardEvent): void {
 			close();
 			return;
 		case "Enter": {
-			const column = open.value ? suggestions.value[activeIndex.value] : undefined;
-			if (column === undefined) {
+			const row = open.value ? rows.value[activeIndex.value] : undefined;
+			if (row === undefined) {
 				emit("submit");
 				return;
 			}
 			event.preventDefault();
-			pick(column);
+			pick(row);
 			return;
 		}
 	}
@@ -218,6 +305,7 @@ function onKeydown(event: KeyboardEvent): void {
  */
 function onFocus(): void {
 	if (focusIsProgrammatic) return;
+	syncSelection();
 	if (props.modelValue.trim().length === 0) show();
 }
 
@@ -238,8 +326,8 @@ function onDocumentPointerDown(event: PointerEvent): void {
 }
 
 /** Typing narrows the list, so the highlight can fall off the end of it. */
-watch(suggestions, (rows) => {
-	if (activeIndex.value >= rows.length) activeIndex.value = 0;
+watch(rows, (next) => {
+	if (activeIndex.value >= next.length) activeIndex.value = 0;
 });
 
 watch(open, (isOpen) => {
@@ -290,6 +378,9 @@ watch(activeIndex, () => {
 				:placeholder="placeholder"
 				@input="onInput"
 				@keydown="onKeydown"
+				@keyup="syncSelection"
+				@click="syncSelection"
+				@select="syncSelection"
 				@focus="onFocus"
 				@focusout="onFocusOut"
 			/>
@@ -315,10 +406,10 @@ watch(activeIndex, () => {
 		</div>
 
 		<div
-			v-if="open && suggestions.length > 0"
+			v-if="open && rows.length > 0"
 			ref="list"
 			role="listbox"
-			:aria-label="`${label} columns`"
+			:aria-label="`${label} suggestions`"
 			class="bg-popover text-popover-foreground absolute left-0 top-full z-50 mt-1 max-h-56 min-w-full overflow-y-auto rounded-md border p-1 shadow-md"
 		>
 			<!-- `mousedown.prevent` keeps focus on the input. WebKit does not focus
@@ -326,8 +417,8 @@ watch(activeIndex, () => {
 			     `onFocusOut` closes the list, and the row is gone before its click
 			     ever fires. Chromium focuses the button, which hid this. -->
 			<button
-				v-for="(column, index) in suggestions"
-				:key="column"
+				v-for="(row, index) in rows"
+				:key="row.value"
 				type="button"
 				role="option"
 				:aria-selected="index === activeIndex"
@@ -335,14 +426,14 @@ watch(activeIndex, () => {
 				:class="index === activeIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'"
 				@mousedown.prevent
 				@mouseenter="activeIndex = index"
-				@click="pick(column)"
+				@click="pick(row)"
 			>
-				<span class="truncate">{{ column }}</span>
+				<span class="truncate">{{ row.value }}</span>
 				<span
-					v-if="typeOf(column)"
+					v-if="row.detail"
 					class="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground"
 				>
-					{{ typeOf(column) }}
+					{{ row.detail }}
 				</span>
 			</button>
 		</div>

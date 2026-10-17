@@ -12,7 +12,7 @@
  */
 import { computed, ref, watch } from "vue";
 import { ArrowUpDown, Check, Filter, Minus, TriangleAlert, X } from "lucide-vue-next";
-import type { BackendError } from "../../../shared/types";
+import type { BackendError, DatabaseType } from "../../../shared/types";
 import { Button } from "../ui/button";
 import ClauseSuggestInput from "./ClauseSuggestInput.vue";
 import {
@@ -37,6 +37,8 @@ const props = withDefaults(
 		columns?: string[];
 		/** Declared SQL type per column, parallel to `columns`. */
 		columnTypes?: string[];
+		/** Connection dialect, so a suggested column is inserted quoted only if needed. */
+		dbType?: DatabaseType;
 		/** The subset currently rendered; always a subset of `columns`. */
 		visibleColumns?: string[];
 		/**
@@ -245,12 +247,14 @@ function commit(): void {
 				<ClauseSuggestInput
 					ref="whereInput"
 					v-model="whereDraft"
+					kind="where"
 					label="WHERE"
 					:icon="Filter"
 					accent="text-info"
 					placeholder=""
 					:columns="columns"
 					:column-types="columnTypes"
+					:db-type="dbType"
 					:invalid="errorTarget === 'where'"
 					:style="{ flexGrow: 1.4 }"
 					@submit="commit"
@@ -258,12 +262,14 @@ function commit(): void {
 
 				<ClauseSuggestInput
 					v-model="orderByDraft"
+					kind="orderBy"
 					label="ORDER BY"
 					:icon="ArrowUpDown"
 					accent="text-warning"
 					placeholder=""
 					:columns="columns"
 					:column-types="columnTypes"
+					:db-type="dbType"
 					:invalid="errorTarget === 'orderBy'"
 					class="border-l"
 					@submit="commit"

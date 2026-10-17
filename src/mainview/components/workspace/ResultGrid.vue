@@ -118,6 +118,11 @@ const props = withDefaults(
 		/** Raw ORDER BY expression shown in the filter band. */
 		orderBy?: string;
 		/**
+		 * Connection dialect, handed to the filter band so a suggested column
+		 * name is inserted quoted only where the dialect cannot take it bare.
+		 */
+		dbType?: DatabaseType;
+		/**
 		 * False when there is no generated statement to append a WHERE to — a
 		 * query tab, whose SQL the user wrote and must not have rewritten.
 		 */
@@ -1893,6 +1898,7 @@ function rowKey(_row: unknown, index: number): number {
 				:busy="busy"
 				:columns="result.columns"
 				:column-types="result.columnTypes"
+				:db-type="dbType"
 				:visible-columns="columns"
 				:error="clauseError?.error ?? null"
 				:error-target="clauseError?.target ?? null"
