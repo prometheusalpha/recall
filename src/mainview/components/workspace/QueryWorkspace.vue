@@ -19,6 +19,7 @@ import { useTabsStore } from "../../stores/tabs";
 import type { Tab } from "../../stores/tabs";
 import { toast } from "../../composables/useToast";
 import { errorMessage, RPC_TIMEOUTS, rpc } from "../../lib/rpc";
+import { clauseInsertText } from "../../lib/clauseSuggestion";
 import type { BackendError, StatementResult } from "../../../shared/types";
 import ResultGrid from "./ResultGrid.vue";
 import ResultViewTabs from "./ResultViewTabs.vue";
@@ -197,12 +198,6 @@ function quoteIdentifier(identifier: string, quote: '"' | "`"): string {
 	const escaped = identifier.split(quote).join(quote + quote);
 	return `${quote}${escaped}${quote}`;
 }
-
-/**
- * The ORDER BY a table tab is currently showing. Kept per tab so switching
- * between two tables does not carry one table's sort onto the other.
- */
-const tableSort = ref<Record<string, { column: string; direction: "asc" | "desc" }>>({});
 
 /**
  * The raw WHERE expression typed into the filter row, per tab. It is appended to
@@ -443,16 +438,10 @@ function tableSelectSql(tab: Tab): string {
 			: tab.schema
 				? `${quoteIdentifier(tab.schema, '"')}.${table}`
 				: table;
-	// The typed expressions win over the header-click sort: they are the more
-	// specific instruction, and `name ASC` cannot be expressed by a single column
-	// plus a direction.
+	// The band is the only sort state: a header sort writes its expression
+	// there, so the statement and the field never disagree.
 	const typedOrderBy = tableOrderBy.value[tab.id]?.trim();
-	const sort = tableSort.value[tab.id];
-	const orderBy = typedOrderBy
-		? ` ORDER BY ${typedOrderBy}`
-		: sort
-			? ` ORDER BY ${quoteIdentifier(sort.column, quote)} ${sort.direction}`
-			: "";
+	const orderBy = typedOrderBy ? ` ORDER BY ${typedOrderBy}` : "";
 	const where = tableWhere.value[tab.id]?.trim();
 	const whereClause = where ? ` WHERE ${where}` : "";
 	/**
@@ -686,24 +675,25 @@ const tableSql = computed(() => {
 });
 
 /**
- * Rebuilds the tab's SELECT with the requested ORDER BY and re-runs it.
+ * Rebuilds the tab's SELECT from the sort the grid asked for and re-runs it.
  *
- * An empty column is how the grid says "drop the ORDER BY", so it has to
- * delete the tab's entry rather than return early — otherwise clearing the
- * sort would leave the previous ORDER BY standing and the statement on screen
- * would not match what the user just asked for.
+ * The expression is written into the band's ORDER BY field rather than kept
+ * beside it, so what the user sees above the grid is exactly what runs. An
+ * empty column is the grid's "clear sort", which empties that field.
  */
 function onGridSort(column: string, direction: "asc" | "desc"): void {
 	const tab = activeTab.value;
 	if (!tab || tab.mode !== "table") return;
-	if (!column) {
-		if (!tableSort.value[tab.id]) return;
-		const next = { ...tableSort.value };
-		delete next[tab.id];
-		tableSort.value = next;
-	} else {
-		tableSort.value = { ...tableSort.value, [tab.id]: { column, direction } };
-	}
+	const dbType = connectionsStore.configs.find(
+		(entry) => entry.id === tab.connectionId,
+	)?.dbType;
+	// The header's own "clear sort" sends no column, and so does a shortcut on
+	// a grid with no focused cell. Clearing the band is what drops the clause.
+	const expression = column
+		? `${clauseInsertText(column, dbType)} ${direction.toUpperCase()}`
+		: "";
+	if (expression === "" && (tableOrderBy.value[tab.id] ?? "") === "") return;
+	tableOrderBy.value = { ...tableOrderBy.value, [tab.id]: expression };
 	// A new ordering makes the current offset meaningless — the rows the user
 	// paged to were the tail of one order and are somewhere else entirely in
 	// the next — so the sort starts the tab back at page 1.

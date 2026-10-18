@@ -404,7 +404,7 @@ export const handlers = {
 	},
 
 	async listDatabases({ connectionId }: Params<"listDatabases">) {
-		const { db, config } = getServerConnection(connectionId);
+		const { db, config } = await getServerConnection(connectionId);
 		return driverFor(config.dbType).listDatabases(db, "");
 	},
 

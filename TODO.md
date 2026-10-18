@@ -112,6 +112,11 @@ Sau:
 - Sidebar index: tooltip hiện condition của partial index, context menu Copy DDL (code xong, chờ test trong app)
 - Khoảng trống dưới sql editor (code xong, chờ test trong app)
 - Sửa: khi reload table thì mất thứ tự code đã thay đổi
+- Connection để idle bị ngắt nhưng UI vẫn báo connected và không tự nối lại (code xong, chờ test trong app)
+  - Nguyên nhân: NAT/firewall reap socket im lặng (không FIN, không RST) nên Bun không bắn `onclose`, pool vẫn giữ session, renderer vẫn `connected`. Request kế tiếp ghi vào socket chết rồi treo tới khi kernel bỏ cuộc — đo trên proxy TCP reap im lặng: **quá 300s** không trả lỗi, sau đó mới ra `Operation timed out`
+  - Sửa trong `src/bun/connectionPool.ts`: `profiles` giữ lại `ConnectionConfig` (xoá khi user disconnect) để request thiếu session thì tự mở lại (`openPrimary`) thay vì ném "No open connection"; `handOut` probe session đã idle ≥ 5s (`probeAlive`, cap 5s) và thay session chết bằng session mới, chỉ chạy khi `inFlight = 0` nên không cắt query đang chạy
+  - Đo lại: idle 8s rồi request → xong sau 5s, không có toast "Connection lost" giả; query `pg_sleep(12)` đang chạy không bị probe/giết; server đóng socket thật vẫn báo `Connection closed` như cũ; disconnect tay không bị tự mở lại
+  - Không replay statement: `WITH x AS (INSERT … RETURNING *) SELECT …` vẫn là "read" theo `isReadStatement` nên chạy lại sẽ nhân đôi dữ liệu
 - Màn loading 
 - Cơ chế update
 - Redis support
