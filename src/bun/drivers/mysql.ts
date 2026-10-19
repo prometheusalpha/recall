@@ -174,7 +174,8 @@ export const mysqlDriver: Driver = {
 		const rows = (await db.unsafe(
 			"SELECT c.column_name AS name, c.column_type AS data_type, " +
 				"c.is_nullable AS is_nullable, c.column_default AS default_value, " +
-				"c.column_comment AS comment, " +
+				"c.column_comment AS comment, c.extra AS extra, " +
+				"c.generation_expression AS generation_expression, " +
 				"EXISTS (SELECT 1 FROM information_schema.statistics s " +
 				"        WHERE s.table_schema = c.table_schema " +
 				"          AND s.table_name = c.table_name " +
@@ -198,6 +199,7 @@ export const mysqlDriver: Driver = {
 			defaultValue:
 				row.default_value == null ? null : String(row.default_value),
 			comment: row.comment == null || row.comment === "" ? null : String(row.comment),
+			ddl: addColumnDdl(schema, table, row),
 		}));
 	},
 
@@ -467,6 +469,57 @@ function indexDdl(
 					: "";
 	const using = index.method === "hash" ? " USING HASH" : "";
 	return `CREATE ${kind}INDEX ${mysqlDriver.quoteIdent(index.name)} ON ${target} (${keyList})${using}`;
+}
+
+/**
+ * `ALTER TABLE … ADD COLUMN` composed from `information_schema.columns`.
+ * `column_default` is ambiguous: MySQL 8 reports a literal unquoted and flags
+ * an expression with `DEFAULT_GENERATED`, while MariaDB already quotes its
+ * literals. So a leading quote is kept as-is, an expression is wrapped in
+ * parens (bare for the CURRENT_TIMESTAMP family, which MySQL 5.7 rejects in
+ * parens), and anything else is quoted, which MySQL coerces for numbers too.
+ */
+function addColumnDdl(
+	schema: string,
+	table: string,
+	row: Record<string, unknown>,
+): string {
+	const extra = String(row.extra ?? "");
+	const parts = [
+		`${mysqlDriver.quoteIdent(String(row.name))} ${String(row.data_type)}`,
+	];
+	const generated = /\b(VIRTUAL|STORED) GENERATED\b/i.exec(extra);
+	if (generated && row.generation_expression) {
+		parts.push(
+			`GENERATED ALWAYS AS (${String(row.generation_expression)}) ${generated[1].toUpperCase()}`,
+		);
+	}
+	parts.push(
+		String(row.is_nullable ?? "").toUpperCase() === "YES" ? "NULL" : "NOT NULL",
+	);
+	const fallback = row.default_value == null ? null : String(row.default_value);
+	if (fallback !== null && fallback.toUpperCase() !== "NULL" && !generated) {
+		if (fallback.startsWith("'")) {
+			parts.push(`DEFAULT ${fallback}`);
+		} else if (/^current_timestamp(\(\d*\))?$/i.test(fallback)) {
+			parts.push(`DEFAULT ${fallback}`);
+		} else if (/DEFAULT_GENERATED/i.test(extra)) {
+			parts.push(`DEFAULT (${fallback})`);
+		} else {
+			parts.push(`DEFAULT '${fallback.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`);
+		}
+	}
+	if (/auto_increment/i.test(extra)) parts.push("AUTO_INCREMENT");
+	const onUpdate = /on update (\S+)/i.exec(extra);
+	if (onUpdate) parts.push(`ON UPDATE ${onUpdate[1]}`);
+	if (row.comment != null && row.comment !== "") {
+		const comment = String(row.comment)
+			.replace(/\\/g, "\\\\")
+			.replace(/'/g, "''");
+		parts.push(`COMMENT '${comment}'`);
+	}
+	const target = mysqlDriver.qualify("", schema, table);
+	return `ALTER TABLE ${target} ADD COLUMN ${parts.join(" ")};`;
 }
 
 type TlsOption = SQL.PostgresOrMySQLOptions["tls"];

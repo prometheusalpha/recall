@@ -63,6 +63,8 @@ export interface ColumnInfo {
 	isPrimaryKey: boolean;
 	defaultValue: string | null;
 	comment: string | null;
+	/** `ALTER TABLE … ADD COLUMN …` that recreates this column, ready to copy. */
+	ddl: string;
 }
 
 /** One index (or primary key / unique constraint) on a table. */

@@ -230,6 +230,8 @@ export const postgresDriver: Driver = {
 			"SELECT a.attname AS name, " +
 				"pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type, " +
 				"NOT a.attnotnull AS is_nullable, " +
+				"a.attidentity::text AS identity, " +
+				"a.attgenerated::text AS generated, " +
 				"COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid), '') AS default_value, " +
 				"pg_catalog.col_description(a.attrelid, a.attnum) AS comment, " +
 				"EXISTS (SELECT 1 FROM pg_catalog.pg_index i " +
@@ -257,6 +259,7 @@ export const postgresDriver: Driver = {
 					? null
 					: String(row.default_value),
 			comment: row.comment == null ? null : String(row.comment),
+			ddl: addColumnDdl(schema, table, row),
 		}));
 	},
 
@@ -694,6 +697,26 @@ function columnDefinition(column: Record<string, unknown>): string {
 	}
 	if (column.not_null === true) parts.push("NOT NULL");
 	return parts.join(" ");
+}
+
+/**
+ * Reuses `tableDdl`'s column spelling so the two never disagree; the comment
+ * rides along as a second statement because Postgres has no inline form.
+ */
+function addColumnDdl(
+	schema: string,
+	table: string,
+	row: Record<string, unknown>,
+): string {
+	const definition = columnDefinition({
+		...row,
+		not_null: row.is_nullable !== true,
+		default_value: row.default_value === "" ? null : row.default_value,
+	});
+	return [
+		`ALTER TABLE ${quoteQualified(schema, table)} ADD COLUMN ${definition}`,
+		...commentStatements(String(row.name), row.comment, schema, table),
+	].join(";\n") + ";";
 }
 
 function commentStatements(

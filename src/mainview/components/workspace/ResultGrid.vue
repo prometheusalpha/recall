@@ -1605,7 +1605,6 @@ function onKeydown(event: KeyboardEvent): void {
 watch(
 	() => props.result,
 	(result) => {
-		selection.clear();
 		editing.value = null;
 		// Same columns, new rows: the drag still describes what is on screen, so a
 		// reload (or a sort, or a new filter) keeps the order the user put the
@@ -1614,9 +1613,14 @@ watch(
 		// reconciliation in `columns` would quietly append the new columns to the
 		// end of an order they were never part of.
 		const signature = columnsSignature(result.columns);
+		// Same shape keeps the cursor where it was, even after a sort: following
+		// the record would need a primary key that most results do not have.
 		if (signature !== orderedColumns) {
 			orderedColumns = signature;
 			columnOrder.value = [];
+			selection.clear();
+		} else {
+			selection.clampToGrid();
 		}
 		stopColumnDrag();
 		// A new result can be short enough to lose the body's vertical

@@ -140,6 +140,25 @@ export function useGridSelection(opts: GridSelectionOptions) {
 		focus.value = null;
 	}
 
+	/** Pulls the selection back inside the grid after the rows changed under it. */
+	function clampToGrid(): void {
+		const rows = opts.rowCount();
+		const cols = opts.columnCount();
+		if (!anchor.value || !focus.value || rows === 0 || cols === 0) {
+			clear();
+			return;
+		}
+		// Only a cell that actually moved is reassigned: a fresh `focus` object
+		// reopens the peek box the user may have dismissed.
+		const fit = (cell: CellPosition): CellPosition => {
+			const row = clamp(cell.row, 0, rows - 1);
+			const col = clamp(cell.col, 0, cols - 1);
+			return row === cell.row && col === cell.col ? cell : { row, col };
+		};
+		anchor.value = fit(anchor.value);
+		focus.value = fit(focus.value);
+	}
+
 	/**
 	 * Where the focus cell should land for a navigation key.
 	 *
@@ -207,6 +226,7 @@ export function useGridSelection(opts: GridSelectionOptions) {
 		extendSelectionTo,
 		selectAll,
 		clear,
+		clampToGrid,
 		nextPosition,
 	};
 }

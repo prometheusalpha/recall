@@ -111,8 +111,8 @@ type TreeNode =
 			/** Row tooltip: a column comment, or a trigger body. */
 			title?: string;
 			/**
-			 * The statement that rebuilds this object. Only index rows carry
-			 * one, and it is also what makes the row answer a right-click.
+			 * The statement that rebuilds this object. Only column and index rows
+			 * carry one, and it is also what makes the row answer a right-click.
 			 */
 			ddl?: string;
 	  };
@@ -462,6 +462,7 @@ function columnLeaves(tableKey: string, columns: ColumnInfo[]): TreeNode[] {
 		kind: "leaf",
 		key: makeKey("leaf", tableKey, "columns", column.name),
 		label: `${column.name} (${column.dataType})`,
+		ddl: column.ddl,
 		badge: column.isNullable
 			? { text: "Nullable", tone: "muted" }
 			: { text: "Not null", tone: "warning" },
@@ -1112,8 +1113,8 @@ function rowBinding(
 		// connection node, so a lookup on any other kind is guarded above.
 		connectedTitle:
 			node.kind === "connection" ? connections.status[node.id] : undefined,
-		// Connections, tables and index rows own actions of their own, so all
-		// three answer a right-click; every other row keeps the browser's menu.
+		// Connections, tables, columns and indexes own actions of their own, so
+		// they answer a right-click; every other row keeps the browser's menu.
 		contextable:
 			node.kind === "connection" ||
 			node.kind === "table" ||
@@ -1159,7 +1160,7 @@ function onRowContextMenu(
 	// back later.
 	if (node.kind === "leaf" && node.ddl !== undefined) {
 		menuConnectionId.value = "";
-		menuItems.value = indexMenuItems(node.ddl);
+		menuItems.value = ddlMenuItems(node.ddl);
 		openMenu(event, menuItems.value);
 	}
 }
@@ -1239,29 +1240,29 @@ function tableMenuItems(node: Extract<TreeNode, { kind: "table" }>): ContextMenu
 }
 
 /**
- * What an index row offers. Copying is the whole of it: the DDL is already in
- * the node, so unlike a table it needs no session and no tab.
+ * What a column or index row offers. Copying is the whole of it: the DDL is
+ * already in the node, so unlike a table it needs no session and no tab.
  */
-function indexMenuItems(ddl: string): ContextMenuItem[] {
+function ddlMenuItems(ddl: string): ContextMenuItem[] {
 	return [
 		{
 			label: "Copy DDL",
 			icon: Copy,
-			action: () => void copyIndexDdl(ddl),
+			action: () => void copyDdl(ddl),
 		},
 	];
 }
 
 /**
- * Writes the index's `CREATE INDEX` to the clipboard. Both outcomes are
- * reported, so a locked-down clipboard is never a silent no-op.
+ * Writes the row's DDL to the clipboard. Both outcomes are reported, so a
+ * locked-down clipboard is never a silent no-op.
  */
-async function copyIndexDdl(ddl: string): Promise<void> {
+async function copyDdl(ddl: string): Promise<void> {
 	try {
 		await navigator.clipboard.writeText(ddl);
-		toast("Index DDL copied");
+		toast("DDL copied");
 	} catch {
-		toast("Could not copy the index DDL");
+		toast("Could not copy the DDL");
 	}
 }
 
