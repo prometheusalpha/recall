@@ -1385,6 +1385,83 @@ async function mountEditor(): Promise<void> {
 					backgroundColor: "var(--chrome)",
 					color: "var(--foreground)",
 				},
+				".cm-panels-top": {
+					borderBottom: "1px solid var(--border)",
+				},
+				// The search panel's stock look is gradient buttons and silver
+				// fields at 70% size; these bring it onto the app's Input/Button.
+				".cm-panel.cm-search": {
+					display: "flex",
+					flexWrap: "wrap",
+					alignItems: "center",
+					gap: "6px",
+					padding: "6px 32px 6px 8px",
+					fontSize: "12px",
+					"& input, & button, & label": { margin: "0" },
+					"& br": { flexBasis: "100%", height: "0" },
+					"& label": {
+						display: "inline-flex",
+						alignItems: "center",
+						gap: "4px",
+						fontSize: "12px",
+						color: "var(--muted-foreground)",
+						cursor: "pointer",
+					},
+					"& input[type=checkbox]": {
+						margin: "0",
+						accentColor: "var(--primary)",
+					},
+					"& [name=close]": {
+						top: "6px",
+						right: "8px",
+						width: "20px",
+						height: "20px",
+						borderRadius: "4px",
+						color: "var(--muted-foreground)",
+						fontSize: "16px",
+						lineHeight: "1",
+					},
+					"& [name=close]:hover": {
+						backgroundColor: "var(--accent)",
+						color: "var(--foreground)",
+					},
+				},
+				".cm-textfield": {
+					height: "26px",
+					minWidth: "180px",
+					padding: "0 8px",
+					fontSize: "12px",
+					color: "var(--foreground)",
+					backgroundColor: dark
+						? "color-mix(in srgb, var(--input) 30%, transparent)"
+						: "var(--background)",
+					border: "1px solid var(--input)",
+					borderRadius: "4px",
+					outline: "none",
+				},
+				".cm-textfield:focus": {
+					borderColor: "var(--ring)",
+					boxShadow:
+						"0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent)",
+				},
+				".cm-button": {
+					height: "26px",
+					padding: "0 10px",
+					fontSize: "12px",
+					color: "var(--foreground)",
+					backgroundImage: "none",
+					backgroundColor: "var(--background)",
+					border: "1px solid var(--border)",
+					borderRadius: "4px",
+					cursor: "pointer",
+				},
+				".cm-button:hover": {
+					backgroundColor: "var(--accent)",
+				},
+				".cm-button:active": {
+					backgroundImage: "none",
+					backgroundColor: "var(--accent)",
+				},
 			},
 			{ dark },
 		);
@@ -1465,6 +1542,25 @@ async function mountEditor(): Promise<void> {
 				),
 				search.search({ top: true }),
 				search.highlightSelectionMatches(),
+				// The stock search panel's fields keep macOS spellcheck and
+				// autocorrect on, and `@codemirror/search` exposes no hook to
+				// set attributes. The panel is mounted by the time listeners run.
+				V.EditorView.updateListener.of((update) => {
+					if (
+						!search.searchPanelOpen(update.state) ||
+						search.searchPanelOpen(update.startState)
+					) {
+						return;
+					}
+					for (const field of update.view.dom.querySelectorAll(
+						".cm-search .cm-textfield",
+					)) {
+						field.setAttribute("spellcheck", "false");
+						field.setAttribute("autocorrect", "off");
+						field.setAttribute("autocapitalize", "off");
+						field.setAttribute("autocomplete", "off");
+					}
+				}),
 				V.EditorView.updateListener.of((update) => {
 					if (!update.docChanged) return;
 					// A tab swap changes the document too; it is not a user edit.

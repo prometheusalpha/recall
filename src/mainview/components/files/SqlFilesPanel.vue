@@ -194,7 +194,7 @@ function onMenu(
 
 /**
  * The actions a tree row offers, keyed off whether it is a directory. A
- * directory cannot be opened, revealed or bound to a datasource, so its menu
+ * directory cannot be opened or bound to a datasource, so its menu
  * is about the directory itself rather than about running a file.
  */
 function fileMenuItems(node: SqlFileNode): ContextMenuItem[] {
@@ -213,6 +213,7 @@ function fileMenuItems(node: SqlFileNode): ContextMenuItem[] {
 			},
 			{ label: "", separator: true },
 			{ label: "Rename…", icon: Pencil, action: startRename },
+			{ label: "Reveal in Finder", icon: FolderSearch, action: reveal },
 			{ label: "", separator: true },
 			{
 				label: "Delete",
@@ -518,8 +519,8 @@ async function confirmDelete(): Promise<void> {
 				<Input
 					v-model="sqlFiles.filter"
 					class="h-6 text-xs"
-					placeholder="*.sql"
-					aria-label="Filter SQL files by name"
+					placeholder="*"
+					aria-label="Filter files by name"
 					spellcheck="false"
 					@change="applyFilter"
 				/>
@@ -571,7 +572,7 @@ async function confirmDelete(): Promise<void> {
 					<DialogDescription>
 						{{ createIsDir
 							? "Folders can be nested, and can hold other folders."
-							: "SQL files show up in the tree as soon as they match the filter." }}
+							: "Files show up in the tree as soon as they match the filter." }}
 					</DialogDescription>
 				</DialogHeader>
 

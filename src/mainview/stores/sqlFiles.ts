@@ -13,7 +13,7 @@ import { useTabsStore } from "./tabs";
 const FOLDERS_KEY = "recall.sqlFileFolders";
 const FILTER_KEY = "recall.sqlFileFilter";
 const BINDINGS_KEY = "recall.sqlFileBindings";
-const DEFAULT_FILTER = "*.sql";
+const DEFAULT_FILTER = "*";
 
 /**
  * How many file→datasource bindings are remembered. The reference app uses the

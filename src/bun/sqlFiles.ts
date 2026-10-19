@@ -40,7 +40,7 @@ const MAX_SCAN_DEPTH = 10;
 /** Largest file the editor will open. Anything larger is refused, not truncated. */
 const MAX_READ_BYTES = 8 * 1024 * 1024;
 
-const DEFAULT_FILTER = "*.sql";
+const DEFAULT_FILTER = "*";
 
 /**
  * Directories that are never interesting for SQL browsing and are often huge
@@ -58,6 +58,9 @@ const IGNORE_DIRS = new Set([
 	".idea",
 	".cache",
 ]);
+
+/** OS metadata files that are never worth showing. Matched lower-cased. */
+const IGNORE_FILES = new Set([".ds_store"]);
 
 /**
  * Resolves `entry` through symlinks and returns it only if it really lives
@@ -137,7 +140,7 @@ function compileFilter(filter: string): RegExp {
 	return compiled;
 }
 
-/** True when a filename matches the folder's filter. An empty filter means `*.sql`. */
+/** True when a filename matches the folder's filter. An empty filter means `*`. */
 export function matchesFilter(name: string, filter: string): boolean {
 	return compileFilter(filter).test(name);
 }
@@ -169,8 +172,8 @@ function compareNodes(a: SqlFileNode, b: SqlFileNode): number {
 }
 
 /**
- * A directory node, or null when it holds nothing that matches the filter.
- * Empty directories are omitted so the tree shows only what can be opened.
+ * A directory node, or null when it was already visited. Empty directories
+ * are kept so a freshly created folder shows up in the tree.
  */
 async function directoryNode(
 	root: string,
@@ -186,7 +189,6 @@ async function directoryNode(
 	if (visited.has(real)) return null;
 	visited.add(real);
 	const children = await scanDirectory(root, real, depth + 1, filter, visited);
-	if (children.length === 0) return null;
 	return { path: real, name, isDir: true, children };
 }
 
@@ -211,6 +213,7 @@ async function scanDirectory(
 	const nodes: SqlFileNode[] = [];
 	for (const entry of entries) {
 		const name = entry.name;
+		if (IGNORE_FILES.has(name.toLowerCase())) continue;
 		const real = await realpathInside(root, join(dir, name));
 		if (real === null) continue;
 

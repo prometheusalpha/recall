@@ -8,7 +8,7 @@
  * resolved inside {@link useTableCatalog}: this file is imported before
  * `createApp().use(createPinia())` runs.
  */
-import { ref, type Ref } from "vue";
+import { ref, watch, type Ref } from "vue";
 import type {
 	ConnectionConfig,
 	DatabaseInfo,
@@ -67,6 +67,19 @@ interface DiscoveredCatalog {
  * is broken again".
  */
 const catalogs = new Map<string, DiscoveredCatalog>();
+
+function emptyCatalog(): DiscoveredCatalog {
+	return {
+		fetchedAt: Date.now(),
+		complete: false,
+		databases: [],
+		schemas: new Map<string, string[]>(),
+		tables: new Map<string, CachedTables>(),
+	};
+}
+
+/** Guards the module-level connect watcher against being installed twice. */
+let watchingConnects = false;
 
 /**
  * How long a catalog stays authoritative. Long enough that one working
@@ -244,11 +257,12 @@ export function useTableCatalog(): TableCatalog {
 		connectionId: string,
 		database: string,
 		schema: string,
+		refresh = false,
 	): Promise<string | null> {
 		const key = scopeKey(database, schema);
 		// The retry path lands here: an incomplete catalog is re-walked so a
 		// single unreadable schema is not re-queried on every keystroke.
-		if (catalog.tables.has(key)) return null;
+		if (!refresh && catalog.tables.has(key)) return null;
 		try {
 			const tables = await connections.listTables({
 				connectionId,
@@ -360,23 +374,14 @@ export function useTableCatalog(): TableCatalog {
 		if (!config) return;
 
 		// A half-answered record is re-walked and kept — `cacheScope` skips what
-		// already landed. A stale one is replaced outright rather than merged,
-		// because its *databases and schemas* may have changed too, and
-		// answering from a stale enumeration is the guess this replaced.
-		const catalog: DiscoveredCatalog =
-			known && fresh
-				? known
-				: {
-						fetchedAt: Date.now(),
-						complete: false,
-						databases: [],
-						schemas: new Map<string, string[]>(),
-						tables: new Map<string, CachedTables>(),
-					};
-		// Registered before the first query, so the scopes land in a record the
-		// row builder can already see; a connection that dies before its first
+		// already landed. A stale one is rebuilt from scratch, since its databases
+		// and schemas may have changed too, but stays visible until the rebuild
+		// lands: the palette answers instantly from it while the walk runs.
+		const catalog = known && fresh ? known : emptyCatalog();
+		// With nothing older to show, registered before the first query so the
+		// scopes land progressively; a connection that dies before its first
 		// answer is removed again below and leaves nothing behind.
-		catalogs.set(connectionId, catalog);
+		if (!known) catalogs.set(connectionId, catalog);
 
 		inFlight.add(connectionId);
 		try {
@@ -387,6 +392,13 @@ export function useTableCatalog(): TableCatalog {
 			// a slow minute to answer still gets its full TTL of cheap searches
 			// instead of expiring on the clock while it was being fetched.
 			catalog.fetchedAt = Date.now();
+			// Swapped in unless `invalidate` dropped the record mid-walk, or the
+			// rebuild reached nothing — an unreachable server keeps its stale rows.
+			const current = catalogs.get(connectionId);
+			const owned = current === catalog || (known !== undefined && current === known);
+			if (owned && (failure === null || catalog.tables.size > 0)) {
+				catalogs.set(connectionId, catalog);
+			}
 			if (failure === null) {
 				fetchErrors.delete(connectionId);
 				// The palette works again, so a later outage is worth reporting.
@@ -402,7 +414,8 @@ export function useTableCatalog(): TableCatalog {
 			// "never connected" case a swallowed catch used to report as "no
 			// tables". Kept as a reason because a profile fails here two distinct
 			// ways: the session would not open, or it would open and not read.
-			catalogs.delete(connectionId);
+			// A stale record being rebuilt is not in the map, so it survives.
+			if (catalogs.get(connectionId) === catalog) catalogs.delete(connectionId);
 			fetchErrors.set(connectionId, errorMessage(err));
 		} finally {
 			inFlight.delete(connectionId);
@@ -434,24 +447,15 @@ export function useTableCatalog(): TableCatalog {
 		const fresh =
 			known !== undefined && Date.now() - known.fetchedAt < CATALOG_TTL_MS;
 		// A fresh record belongs to a walk that may still be filling it, and a
-		// scope it already answered is left alone. A stale one is replaced
-		// outright, exactly as the walk replaces it.
-		const catalog: DiscoveredCatalog =
-			known && fresh
-				? known
-				: {
-						fetchedAt: Date.now(),
-						complete: false,
-						databases: [],
-						schemas: new Map<string, string[]>(),
-						tables: new Map<string, CachedTables>(),
-					};
-		if (catalog !== known) catalogs.set(connectionId, catalog);
-		if (catalog.tables.has(scopeKey(database, schema))) return;
+		// scope it already answered is left alone. A stale one is kept — the
+		// palette is still answering from it — and only this scope is re-listed.
+		const catalog = known ?? emptyCatalog();
+		if (!known) catalogs.set(connectionId, catalog);
+		if (fresh && catalog.tables.has(scopeKey(database, schema))) return;
 		try {
 			// The backend answers only for a session `connect()` opened.
 			await connections.ensureConnected(connectionId);
-			await cacheScope(catalog, connectionId, database, schema);
+			await cacheScope(catalog, connectionId, database, schema, !fresh);
 		} catch {
 			// Cached as a miss by nothing at all: the next tab retries it.
 		}
@@ -504,6 +508,21 @@ export function useTableCatalog(): TableCatalog {
 	function invalidate(connectionId: string): void {
 		catalogs.delete(connectionId);
 		cacheVersion.value += 1;
+	}
+
+	if (!watchingConnects) {
+		watchingConnects = true;
+		// Discovery starts the moment a profile connects, not on the first
+		// keystroke, so the palette already has rows when it opens.
+		watch(
+			() =>
+				Object.keys(connections.status).filter(
+					(id) => connections.status[id] === "connected",
+				),
+			(ids, prev) => {
+				for (const id of ids) if (!prev?.includes(id)) void loadTables(id);
+			},
+		);
 	}
 
 	return {
