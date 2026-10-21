@@ -1,21 +1,30 @@
-import type { ConnectionConfig, DatabaseType } from "@shared/types";
+import type {
+	ConnectionConfig,
+	DatabaseType,
+	SqlConnectionConfig,
+	SqlDbType,
+} from "@shared/types";
 
 /** Default TCP port per driver. */
 export const DEFAULT_PORTS: Record<DatabaseType, number> = {
 	postgres: 5432,
 	mysql: 3306,
+	redis: 6379,
 };
 
 /** Default account name per driver. */
 export const DEFAULT_USERS: Record<DatabaseType, string> = {
 	postgres: "postgres",
 	mysql: "root",
+	// Empty means the `default` user, which is all a Redis without ACLs has.
+	redis: "",
 };
 
-/** Human labels for the two drivers the app supports. */
+/** Human labels for the drivers the app supports. */
 export const DB_TYPE_LABELS: Record<DatabaseType, string> = {
 	postgres: "PostgreSQL",
 	mysql: "MySQL",
+	redis: "Redis",
 };
 
 export const MYSQL_URL_PARAMS_PLACEHOLDER = "charset=utf8mb4";
@@ -65,7 +74,7 @@ export const MYSQL_TLS_MODE_LABELS: Record<MysqlTlsMode, string> = {
  * Every `urlParams` key that stands for "the TLS mode" on each driver. They are
  * aliases of one setting, so writing one clears the others.
  */
-const TLS_MODE_KEYS: Record<DatabaseType, readonly string[]> = {
+const TLS_MODE_KEYS: Record<SqlDbType, readonly string[]> = {
 	postgres: ["sslmode"],
 	mysql: ["ssl-mode", "sslmode", "ssl"],
 };
@@ -75,7 +84,7 @@ const TLS_MODE_KEYS: Record<DatabaseType, readonly string[]> = {
  * bare on/off flag carried by `ConnectionConfig.ssl` and needs no parameter.
  * These are the spellings the Bun drivers in `src/bun/drivers` understand.
  */
-const TLS_MODE_PARAMS: Record<DatabaseType, Record<string, string | null>> = {
+const TLS_MODE_PARAMS: Record<SqlDbType, Record<string, string | null>> = {
 	postgres: {
 		disable: "disable",
 		prefer: "prefer",
@@ -94,7 +103,7 @@ const TLS_MODE_PARAMS: Record<DatabaseType, Record<string, string | null>> = {
 
 /** URL parameter names carrying each TLS material file path. */
 export const TLS_FILE_KEYS: Record<
-	DatabaseType,
+	SqlDbType,
 	{ ca: string; cert: string; key: string }
 > = {
 	postgres: { ca: "sslrootcert", cert: "sslcert", key: "sslkey" },
@@ -103,7 +112,7 @@ export const TLS_FILE_KEYS: Record<
 
 /** The TLS mode a config currently requests, derived from its own fields. */
 export function tlsModeOf(
-	config: ConnectionConfig,
+	config: SqlConnectionConfig,
 ): PostgresTlsMode | MysqlTlsMode {
 	for (const key of TLS_MODE_KEYS[config.dbType]) {
 		const raw = readUrlParam(config.urlParams, key);
@@ -133,9 +142,9 @@ export function tlsModeOf(
  * parameter never disagree.
  */
 export function withTlsMode(
-	config: ConnectionConfig,
+	config: SqlConnectionConfig,
 	mode: PostgresTlsMode | MysqlTlsMode,
-): ConnectionConfig {
+): SqlConnectionConfig {
 	const value = (TLS_MODE_PARAMS[config.dbType] as Record<string, string | null>)[
 		mode
 	];
@@ -203,22 +212,26 @@ export type ConnectionFieldErrors = Partial<Record<ConnectionFieldKey, string>>;
 
 /** A fresh, unsaved profile for `dbType`. */
 export function emptyConnection(dbType: DatabaseType): ConnectionConfig {
-	return {
+	const base = {
 		id: crypto.randomUUID(),
 		name: "",
-		dbType,
 		host: "localhost",
 		port: DEFAULT_PORTS[dbType],
 		username: DEFAULT_USERS[dbType],
 		password: "",
-		database: "",
-		defaultSchema: dbType === "postgres" ? "public" : "",
 		ssl: false,
-		urlParams: "",
 		connectTimeoutSecs: DEFAULT_CONNECT_TIMEOUT_SECS,
-		queryTimeoutSecs: 0,
 		note: "",
 		savePassword: true,
+	};
+	if (dbType === "redis") return { ...base, dbType, defaultDb: 0 };
+	return {
+		...base,
+		dbType,
+		database: "",
+		defaultSchema: dbType === "postgres" ? "public" : "",
+		urlParams: "",
+		queryTimeoutSecs: 0,
 		showSystemSchemas: false,
 		hiddenDatabases: [],
 	};

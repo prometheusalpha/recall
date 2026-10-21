@@ -2,12 +2,12 @@ import type { SQL } from "bun";
 import type {
 	BackendError,
 	ColumnInfo,
-	ConnectionConfig,
 	DatabaseConnectionInfo,
-	DatabaseType,
 	ExplainPlan,
 	ForeignKeyInfo,
 	IndexInfo,
+	SqlConnectionConfig,
+	SqlDbType,
 	TableInfo,
 	TriggerInfo,
 } from "../shared/types";
@@ -23,9 +23,9 @@ export type SQLOptions = SQL.Options;
  * may branch on `dbType` or spell out `information_schema`.
  */
 export interface Driver {
-	readonly dbType: DatabaseType;
+	readonly dbType: SqlDbType;
 	/** Build the Bun.SQL constructor options from a ConnectionConfig. */
-	buildOptions(cfg: ConnectionConfig): SQLOptions;
+	buildOptions(cfg: SqlConnectionConfig): SQLOptions;
 	/** Cheap liveness + version probe. Runs `SELECT version()`-equivalent. */
 	ping(db: SQL): Promise<DatabaseConnectionInfo>;
 	/** Normalized quote character for identifiers. */
@@ -43,7 +43,7 @@ export interface Driver {
 	 * Postgres only; MySQL returns []. `cfg` is passed because the reference
 	 * app's schema list honours `ConnectionConfig.showSystemSchemas`.
 	 */
-	listSchemas(db: SQL, cfg: ConnectionConfig, database: string): Promise<string[]>;
+	listSchemas(db: SQL, cfg: SqlConnectionConfig, database: string): Promise<string[]>;
 	/** Top-level containers shown in the connection tree (databases). */
 	listDatabases(db: SQL, filter: string): Promise<
 		Array<{ name: string; comment: string | null }>
@@ -133,12 +133,12 @@ export interface Driver {
 	explain(db: SQL, sql: string): Promise<ExplainPlan>;
 }
 
-export const DRIVERS: Record<DatabaseType, Driver> = {
+export const DRIVERS: Record<SqlDbType, Driver> = {
 	postgres: postgresDriver,
 	mysql: mysqlDriver,
 };
 
-export function driverFor(dbType: DatabaseType): Driver {
+export function driverFor(dbType: SqlDbType): Driver {
 	const driver = DRIVERS[dbType];
 	if (!driver) {
 		throw new Error(
@@ -400,7 +400,7 @@ export function backendFailure(error: unknown, sql?: string): BackendFailure {
 export function splitStatements(
 
 	sql: string,
-	dbType: DatabaseType,
+	dbType: SqlDbType,
 ): string[] {
 	const isPostgres = dbType === "postgres";
 	const out: string[] = [];

@@ -25,7 +25,7 @@ import {
 } from "lucide-vue-next";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
-import type { BackendError, DatabaseType, StatementResult } from "../../../shared/types";
+import type { BackendError, SqlDbType, StatementResult } from "../../../shared/types";
 import {
 	autoColumnWidth,
 	GRID_CHAR_WIDTH,
@@ -113,7 +113,7 @@ const props = withDefaults(
 			database: string;
 			schema: string;
 			table: string;
-			dbType: DatabaseType;
+			dbType: SqlDbType;
 		} | null;
 		busy?: boolean;
 		/** Raw WHERE expression shown in the filter band. */
@@ -124,7 +124,7 @@ const props = withDefaults(
 		 * Connection dialect, handed to the filter band so a suggested column
 		 * name is inserted quoted only where the dialect cannot take it bare.
 		 */
-		dbType?: DatabaseType;
+		dbType?: SqlDbType;
 		/**
 		 * False when there is no generated statement to append a WHERE to — a
 		 * query tab, whose SQL the user wrote and must not have rewritten.

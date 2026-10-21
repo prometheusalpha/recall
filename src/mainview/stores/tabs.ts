@@ -1,7 +1,8 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 
-export type TabMode = "query" | "table";
+/** `redis` tabs carry the logical db number in `database`; `sql` stays empty. */
+export type TabMode = "query" | "table" | "redis";
 
 export interface Tab {
 	id: string;
@@ -67,6 +68,13 @@ export interface OpenTableTabOptions {
 	forceNew?: boolean;
 }
 
+export interface OpenRedisTabOptions {
+	connectionId: string;
+	db: number;
+	/** Shown in the title, so two Redis servers' db0 can be told apart. */
+	connectionName: string;
+}
+
 const STORAGE_KEY = "recall.tabs";
 const PERSIST_DEBOUNCE_MS = 300;
 
@@ -86,7 +94,7 @@ function isTab(value: unknown): value is Tab {
 		"table" in value &&
 		typeof value.table === "string" &&
 		"mode" in value &&
-		(value.mode === "query" || value.mode === "table") &&
+		(value.mode === "query" || value.mode === "table" || value.mode === "redis") &&
 		"sql" in value &&
 		typeof value.sql === "string" &&
 		"savedSql" in value &&
@@ -276,6 +284,31 @@ export const useTabsStore = defineStore("tabs", () => {
 		return tab;
 	}
 
+	/** One tab per logical database: reopening one just brings it forward. */
+	function openRedisTab(options: OpenRedisTabOptions): Tab {
+		const target: TabTarget = {
+			connectionId: options.connectionId,
+			database: String(options.db),
+			schema: "",
+			mode: "redis",
+			table: "",
+		};
+		const existing = tabs.value.find((tab) => isSameTab(tab, target, undefined));
+		if (existing) {
+			activate(existing.id);
+			return existing;
+		}
+		const tab = createTab(
+			target,
+			`${options.connectionName} · db${options.db}`,
+			"",
+			undefined,
+		);
+		tabs.value.push(tab);
+		activate(tab.id);
+		return tab;
+	}
+
 	function openTableTab(options: OpenTableTabOptions): Tab {
 		const target: TabTarget = {
 			connectionId: options.connectionId,
@@ -443,6 +476,7 @@ export const useTabsStore = defineStore("tabs", () => {
 		openQueryTab,
 		setTarget,
 		openTableTab,
+		openRedisTab,
 		activate,
 		close,
 		closeOthers,

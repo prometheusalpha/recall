@@ -114,7 +114,7 @@ export const useBookmarksStore = defineStore("bookmarks", () => {
 				const resolution = resolveFileDatasource(
 					stored.path,
 					sqlFiles.bindings,
-					connections.configs,
+					connections.sqlConfigs,
 					connections.activeId,
 				);
 				if (!resolution) {

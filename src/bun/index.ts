@@ -1,6 +1,7 @@
 import { BrowserWindow, Updater } from "electrobun/main";
 import { rpc, setPageZoomApplier } from "./rpc";
 import { closeAllConnections } from "./connectionPool";
+import { closeAllRedis } from "./redis/pool";
 import { setupApplicationMenu } from "./menu";
 
 export { rpc } from "./rpc";
@@ -50,6 +51,7 @@ const mainWindow = new BrowserWindow({
 
 mainWindow.on("close", () => {
 	void closeAllConnections();
+	void closeAllRedis();
 });
 
 // The renderer keeps the chosen zoom in localStorage and re-applies it on every

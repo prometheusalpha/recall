@@ -1,10 +1,10 @@
 import { SQL } from "bun";
-import type { ConnectionConfig } from "../shared/types";
+import type { SqlConnectionConfig } from "../shared/types";
 import { credentialStore } from "./credentialStore";
 import { driverFor, normalizeBackendError } from "./driver";
 
 export interface LiveConnection {
-	config: ConnectionConfig;
+	config: SqlConnectionConfig;
 	db: SQL;
 	connectedAt: number;
 	/** The profile this session belongs to; several sessions share one. */
@@ -30,7 +30,7 @@ const opening = new Map<string, Promise<LiveConnection>>();
  * reopen its own session instead of failing on a socket nobody was left to
  * replace.
  */
-const profiles = new Map<string, ConnectionConfig>();
+const profiles = new Map<string, SqlConnectionConfig>();
 
 /**
  * How long a session may sit unused before the next request probes it first.
@@ -114,7 +114,7 @@ function notifyConnectionLost(connectionId: string, reason: string): void {
  * reconnecting one database never drops the others.
  */
 export async function openConnection(
-	cfg: ConnectionConfig,
+	cfg: SqlConnectionConfig,
 	primary: boolean,
 ): Promise<LiveConnection> {
 	const key = poolKey(cfg.id, cfg.database);
@@ -338,7 +338,7 @@ export async function getConnection(
 	const pending = opening.get(key);
 	if (pending) return pending;
 
-	const config: ConnectionConfig = { ...primary.config, database };
+	const config: SqlConnectionConfig = { ...primary.config, database };
 	const promise = openConnection(config, false).finally(() => {
 		opening.delete(key);
 	});

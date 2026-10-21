@@ -1,5 +1,6 @@
 # Integration-test databases. `docker compose up -d` then point
 # RECALL_TEST_PG_URL at postgres://postgres:postgres@127.0.0.1:55432/recall_test
+# and RECALL_TEST_REDIS_URL=redis://127.0.0.1:56379
 services:
   postgres:
     image: postgres:17
@@ -10,6 +11,16 @@ services:
       - "55432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d recall_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 3s
       retries: 30

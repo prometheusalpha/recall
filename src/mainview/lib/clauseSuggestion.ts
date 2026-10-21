@@ -12,7 +12,7 @@
  * Quoting follows the dialect, so a mixed-case Postgres column inserts as
  * `"OrderId"` while `order_id` stays bare.
  */
-import type { DatabaseType } from "../../shared/types";
+import type { SqlDbType } from "../../shared/types";
 import { matchFuzzy } from "./fuzzy";
 import { IDENTIFIER_QUOTES, MYSQL_KEYWORDS, POSTGRES_KEYWORDS } from "./sqlLexicon";
 
@@ -47,7 +47,7 @@ export interface ClauseFieldSuggestionOptions {
 	columns: readonly string[];
 	token: string;
 	quotedIdentifier: boolean;
-	dbType?: DatabaseType;
+	dbType?: SqlDbType;
 }
 
 /**
@@ -75,7 +75,7 @@ const CONNECTORS = ["AND", "OR"] as const;
  * Identifiers that resolve to themselves unquoted. Postgres folds bare names to
  * lower case; MySQL keeps their case but allows no space, dash or dot.
  */
-const BARE_IDENTIFIER: Record<DatabaseType, RegExp> = {
+const BARE_IDENTIFIER: Record<SqlDbType, RegExp> = {
 	postgres: /^[a-z_][a-z0-9_$]*$/,
 	mysql: /^[A-Za-z_$][A-Za-z0-9_$]*$/,
 };
@@ -85,7 +85,7 @@ const BARE_IDENTIFIER: Record<DatabaseType, RegExp> = {
  * parses as the keyword, so this decides the half of the quoting rule that
  * `BARE_IDENTIFIER` cannot.
  */
-const KEYWORDS: Record<DatabaseType, string> = {
+const KEYWORDS: Record<SqlDbType, string> = {
 	postgres: POSTGRES_KEYWORDS,
 	mysql: MYSQL_KEYWORDS,
 };
@@ -97,13 +97,13 @@ interface ActiveQuote {
 }
 
 /** Per-dialect reserved words, read from the dialect once. */
-const reservedWordCache = new Map<DatabaseType, ReadonlySet<string>>();
+const reservedWordCache = new Map<SqlDbType, ReadonlySet<string>>();
 
 /**
  * A bare identifier whose spelling is a keyword parses as the keyword, so the
  * dialect's own word list decides that half of the quoting rule.
  */
-function reservedWords(dbType: DatabaseType): ReadonlySet<string> {
+function reservedWords(dbType: SqlDbType): ReadonlySet<string> {
 	const cached = reservedWordCache.get(dbType);
 	if (cached !== undefined) return cached;
 	const words = new Set(
@@ -315,7 +315,7 @@ export function clauseFieldSuggestions(
  * The name as a pick should write it: quoted only when the dialect needs it, so
  * a readable fragment stays readable.
  */
-export function clauseInsertText(column: string, dbType?: DatabaseType): string {
+export function clauseInsertText(column: string, dbType?: SqlDbType): string {
 	if (dbType === undefined) return column;
 	if (
 		BARE_IDENTIFIER[dbType].test(column) &&

@@ -8,9 +8,10 @@ import type {
 	ConnectionTestResult,
 	DatabaseConnectionInfo,
 	DatabaseInfo,
-	DatabaseType,
 	ForeignKeyInfo,
 	IndexInfo,
+	SqlConnectionConfig,
+	SqlDbType,
 	TableInfo,
 	TriggerInfo,
 } from "../../shared/types";
@@ -25,7 +26,8 @@ export type ConnectionStatus =
 /** Where profiles lived before the SQLite cutover; read once, then deleted. */
 const LEGACY_STORAGE_KEY = "recall.connections";
 
-function isDatabaseType(value: unknown): value is DatabaseType {
+/** The legacy blob predates Redis, so only SQL profiles can be in it. */
+function isSqlDbType(value: unknown): value is SqlDbType {
 	return value === "postgres" || value === "mysql";
 }
 
@@ -35,7 +37,7 @@ function isDatabaseType(value: unknown): value is DatabaseType {
  * field, and `readLegacyProfiles` fills it in before anything else sees the
  * profile.
  */
-type StoredConfig = Omit<ConnectionProfile, "hiddenDatabases"> & {
+type StoredConfig = Omit<SqlConnectionConfig, "password" | "hiddenDatabases"> & {
 	hiddenDatabases?: string[];
 };
 
@@ -48,7 +50,7 @@ function isStoredConfig(value: unknown): value is StoredConfig {
 		"name" in value &&
 		typeof value.name === "string" &&
 		"dbType" in value &&
-		isDatabaseType(value.dbType) &&
+		isSqlDbType(value.dbType) &&
 		"host" in value &&
 		typeof value.host === "string" &&
 		"port" in value &&
@@ -166,6 +168,13 @@ export const useConnectionsStore = defineStore("connections", () => {
 	let writes: Promise<void> = Promise.resolve();
 	/** In-flight (or finished) startup read; `null` until `hydrate` is called. */
 	let hydration: Promise<void> | null = null;
+
+	/** The profiles SQL-only features (files, palette, catalog) may offer. */
+	const sqlConfigs = computed(() =>
+		configs.value.filter(
+			(config): config is SqlConnectionConfig => config.dbType !== "redis",
+		),
+	);
 
 	const connectedIds = computed(() =>
 		Object.entries(status.value)
@@ -315,15 +324,14 @@ export const useConnectionsStore = defineStore("connections", () => {
 		persist();
 	}
 
-	function update(id: string, patch: Partial<ConnectionConfig>): void {
+	function update(id: string, next: ConnectionConfig): void {
 		const index = configs.value.findIndex((entry) => entry.id === id);
 		const previousUsername = configs.value[index].username;
-		if (patch.password) passwords.value[id] = patch.password;
+		if (next.password) passwords.value[id] = next.password;
 		// An explicit empty password means "clear the cached one".
-		if (patch.password === "") delete passwords.value[id];
+		if (next.password === "") delete passwords.value[id];
 		const entry: ConnectionConfig = {
-			...configs.value[index],
-			...patch,
+			...next,
 			id,
 			password: passwords.value[id] ?? "",
 		};
@@ -341,6 +349,19 @@ export const useConnectionsStore = defineStore("connections", () => {
 			forgetStoredCredential(id, previousUsername);
 		}
 		configs.value[index] = entry;
+		persist();
+	}
+
+	/**
+	 * The one field edited outside the form. Separate from `update` because it
+	 * is SQL-only and leaves the password alone, which a whole-profile write
+	 * would read as "clear it".
+	 */
+	function setHiddenDatabases(id: string, names: string[]): void {
+		const index = configs.value.findIndex((entry) => entry.id === id);
+		const config = configs.value[index];
+		if (!config || config.dbType === "redis") return;
+		configs.value[index] = { ...config, hiddenDatabases: names };
 		persist();
 	}
 
@@ -662,6 +683,7 @@ export const useConnectionsStore = defineStore("connections", () => {
 
 	return {
 		configs,
+		sqlConfigs,
 		passwords,
 		activeId,
 		status,
@@ -671,6 +693,7 @@ export const useConnectionsStore = defineStore("connections", () => {
 		hydrate,
 		add,
 		update,
+		setHiddenDatabases,
 		remove,
 		connect,
 		cancelConnect,

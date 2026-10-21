@@ -19,10 +19,10 @@
  * a string in an `int` column stays unquoted so it reads as a number to the
  * server, while the same text in a `text` column stays quoted.
  */
-import type { DatabaseType } from "../../shared/types";
+import type { SqlDbType } from "../../shared/types";
 
 export interface InsertStatementInput {
-	dbType: DatabaseType;
+	dbType: SqlDbType;
 	database: string;
 	schema: string;
 	table: string;
@@ -62,13 +62,13 @@ const NUMERIC_TYPE_PREFIXES: Record<string, true> = {
 const NUMERIC_LITERAL = /^-?\d+(\.\d+)?([eE][-+]?\d+)?$/;
 
 /** Identifier quote with the embedded quote doubled. */
-function quoteIdentifier(name: string, dbType: DatabaseType): string {
+function quoteIdentifier(name: string, dbType: SqlDbType): string {
 	const quote = dbType === "mysql" ? "`" : "\"";
 	return quote + name.split(quote).join(quote + quote) + quote;
 }
 
 /** Single-quoted literal; MySQL also escapes the backslash it treats as live. */
-function quoteStringLiteral(value: string, dbType: DatabaseType): string {
+function quoteStringLiteral(value: string, dbType: SqlDbType): string {
 	let escaped = value.replace(/'/g, "''");
 	if (dbType === "mysql") escaped = escaped.replace(/\\/g, "\\\\");
 	return `'${escaped}'`;
@@ -100,7 +100,7 @@ function qualifyTarget(input: InsertStatementInput): string {
 function literal(
 	value: unknown,
 	columnType: string | undefined,
-	dbType: DatabaseType,
+	dbType: SqlDbType,
 ): string {
 	if (value === null || value === undefined) return "NULL";
 	if (typeof value === "number") return String(value);

@@ -137,7 +137,7 @@ export function useQuickOpen(): QuickOpenPalette {
 			resolveFileDatasource(
 				path,
 				sqlFiles.bindings,
-				connections.configs,
+				connections.sqlConfigs,
 				connections.activeId,
 			)?.datasource ?? null
 		);
@@ -154,7 +154,7 @@ export function useQuickOpen(): QuickOpenPalette {
 	 * the sidebar for a user who only wanted to look.
 	 */
 	function fanOutTables(): void {
-		const pending = connections.configs.map((config) =>
+		const pending = connections.sqlConfigs.map((config) =>
 			catalog.loadTables(config.id),
 		);
 		if (pending.length === 0) {
@@ -241,10 +241,12 @@ export function useQuickOpen(): QuickOpenPalette {
 			kind: "connection",
 			id: config.id,
 			label: config.name,
-			description: `${config.dbType} · ${config.host}:${config.port} · ${config.database}`,
+			description: `${config.dbType} · ${config.host}:${config.port} · ${
+				config.dbType === "redis" ? `db${config.defaultDb}` : config.database
+			}`,
 			connectionId: config.id,
 		}));
-		for (const config of connections.configs) {
+		for (const config of connections.sqlConfigs) {
 			catalog.eachDiscoveredTable(config.id, (cached) => {
 				for (const entry of cached.tables) {
 					rows.push({

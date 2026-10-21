@@ -43,6 +43,11 @@ function newQuery(): void {
 		return;
 	}
 	const config = connections.configs.find((entry) => entry.id === id);
+	// Redis has no SQL to write; its "new query" is the console on its own db.
+	if (config?.dbType === "redis") {
+		tabs.openRedisTab({ connectionId: id, db: config.defaultDb, connectionName: config.name });
+		return;
+	}
 	tabs.openQueryTab({
 		connectionId: id,
 		database: config?.database ?? "",

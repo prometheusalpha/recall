@@ -3,28 +3,46 @@
  * This module emits no runtime code and is imported by both sides.
  */
 
-export type DatabaseType = "postgres" | "mysql";
+export type SqlDbType = "postgres" | "mysql";
+export type DatabaseType = SqlDbType | "redis";
 
-export interface ConnectionConfig {
+/**
+ * Engines are split by family rather than flattened into one config. Code that
+ * only makes sense for SQL takes `SqlConnectionConfig`, so a Redis profile
+ * cannot fall into an `isMysql ? … : postgres` branch without the compiler
+ * noticing.
+ */
+interface ConnectionBase {
 	id: string;
 	name: string;
-	dbType: DatabaseType;
 	host: string;
 	port: number;
 	username: string;
 	password: string;
-	database: string;
-	/** Postgres only. Empty for MySQL (databases are the top-level container). */
-	defaultSchema: string;
 	ssl: boolean;
-	/** Raw query string appended to the driver URL, e.g. `sslmode=verify-full`. */
-	urlParams: string;
 	connectTimeoutSecs: number;
-	queryTimeoutSecs: number;
 	/** Free-form user note about the connection; mirrors the reference `note`. */
 	note: string;
 	/** Keep the password in the session cache; mirrors `save_password`. */
 	savePassword: boolean;
+}
+
+export interface RedisConnectionConfig extends ConnectionBase {
+	dbType: "redis";
+	/** Logical database the sidebar opens on; Redis numbers them from 0. */
+	defaultDb: number;
+}
+
+export type ConnectionConfig = SqlConnectionConfig | RedisConnectionConfig;
+
+export interface SqlConnectionConfig extends ConnectionBase {
+	dbType: SqlDbType;
+	database: string;
+	/** Postgres only. Empty for MySQL (databases are the top-level container). */
+	defaultSchema: string;
+	/** Raw query string appended to the driver URL, e.g. `sslmode=verify-full`. */
+	urlParams: string;
+	queryTimeoutSecs: number;
 	/** Postgres only: list `pg_*`/`information_schema`; mirrors `show_system_schemas`. */
 	showSystemSchemas: boolean;
 	/**
@@ -41,7 +59,9 @@ export interface ConnectionConfig {
  * A stored profile: a `ConnectionConfig` without its password, which lives in
  * the OS keychain (`src/bun/credentialStore.ts`) rather than on disk.
  */
-export type ConnectionProfile = Omit<ConnectionConfig, "password">;
+export type ConnectionProfile =
+	| Omit<SqlConnectionConfig, "password">
+	| Omit<RedisConnectionConfig, "password">;
 
 export interface DatabaseInfo {
 	name: string;

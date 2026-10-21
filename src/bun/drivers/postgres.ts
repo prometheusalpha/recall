@@ -1,12 +1,12 @@
 import type { SQL } from "bun";
 import type {
 	ColumnInfo,
-	ConnectionConfig,
 	DatabaseConnectionInfo,
 	ExplainPlan,
 	ExplainPlanNode,
 	ForeignKeyInfo,
 	IndexInfo,
+	SqlConnectionConfig,
 	TableInfo,
 	TriggerInfo,
 } from "../../shared/types";
@@ -73,7 +73,7 @@ export const postgresDriver: Driver = {
 	dbType: "postgres",
 	databaseScoped: true,
 
-	buildOptions(cfg: ConnectionConfig): SQLOptions {
+	buildOptions(cfg: SqlConnectionConfig): SQLOptions {
 		const params = parseUrlParams(cfg.urlParams);
 		const runtime: Record<string, string | boolean | number> = {};
 		// `ssl` maps to libpq's sslmode; an explicit sslmode in urlParams wins.
@@ -145,7 +145,7 @@ export const postgresDriver: Driver = {
 	// `isSchemaAware(db_type)` at `ConnectionDialog.vue:9867`.
 	async listSchemas(
 		db: SQL,
-		cfg: ConnectionConfig,
+		cfg: SqlConnectionConfig,
 		_database: string,
 	): Promise<string[]> {
 		// Temp namespaces (`pg_temp_N`, `pg_toast_temp_N`) are per-session scratch

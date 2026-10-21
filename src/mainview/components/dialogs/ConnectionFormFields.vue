@@ -4,11 +4,11 @@
  * per-driver TLS block, and the Advanced section.
  *
  * The component is fully controlled — it never mutates `modelValue`, it emits
- * a new `ConnectionConfig` on every edit.
+ * a new `SqlConnectionConfig` on every edit.
  */
 import type { AcceptableValue } from "reka-ui";
 import { computed, ref, useId, watch } from "vue";
-import type { ConnectionConfig } from "@shared/types";
+import type { SqlConnectionConfig } from "@shared/types";
 import {
 	MYSQL_TLS_MODE_LABELS,
 	MYSQL_TLS_MODES,
@@ -37,7 +37,7 @@ import {
 import { Switch } from "../ui/switch";
 
 const props = withDefaults(defineProps<{
-	modelValue: ConnectionConfig;
+	modelValue: SqlConnectionConfig;
 	/** Inline validation messages, keyed by field name. */
 	errors?: ConnectionFieldErrors;
 	/**
@@ -52,7 +52,7 @@ const props = withDefaults(defineProps<{
 }>(), { databases: () => [], schemas: () => [] });
 
 const emit = defineEmits<{
-	(e: "update:modelValue", value: ConnectionConfig): void;
+	(e: "update:modelValue", value: SqlConnectionConfig): void;
 }>();
 
 type TextField =

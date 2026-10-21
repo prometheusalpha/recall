@@ -11,6 +11,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Pane, Splitpanes } from "splitpanes";
 import type { SplitpanesResizedPayload } from "splitpanes";
 import "splitpanes/dist/splitpanes.css";
+import RedisWorkspace from "../redis/RedisWorkspace.vue";
 import { FilePlus2Icon, RefreshCwIcon, TriangleAlertIcon } from "lucide-vue-next";
 import { useConnectionsStore } from "../../stores/connections";
 import { useQueryStore } from "../../stores/query";
@@ -140,7 +141,7 @@ const isTableTab = computed(() => activeTab.value?.mode === "table");
  */
 const activeDbType = computed(
 	() =>
-		connectionsStore.configs.find(
+		connectionsStore.sqlConfigs.find(
 			(entry) => entry.id === activeTab.value?.connectionId,
 		)?.dbType,
 );
@@ -176,13 +177,16 @@ const hasConnection = computed(
  * config otherwise, so the button works before connecting.
  */
 function openNewQueryTab(): void {
-	const connectionId =
-		connectionsStore.activeId ?? connectionsStore.configs[0]?.id;
+	// A Redis connection being active is no reason to open SQL against it.
+	const active = connectionsStore.sqlConfigs.find(
+		(entry) => entry.id === connectionsStore.activeId,
+	);
+	const connectionId = (active ?? connectionsStore.sqlConfigs[0])?.id;
 	if (!connectionId) {
-		toast("Add a connection first");
+		toast("Add a SQL connection first");
 		return;
 	}
-	const config = connectionsStore.configs.find((entry) => entry.id === connectionId);
+	const config = connectionsStore.sqlConfigs.find((entry) => entry.id === connectionId);
 	const database =
 		connectionsStore.databaseInfo[connectionId]?.currentDatabase ??
 		config?.database ??
@@ -416,7 +420,7 @@ async function countActiveTable(): Promise<void> {
  * silently rank a prefix of the table instead of the table itself.
  */
 function tableSelectSql(tab: Tab): string {
-	const config = connectionsStore.configs.find(
+	const config = connectionsStore.sqlConfigs.find(
 		(entry) => entry.id === tab.connectionId,
 	);
 	const isMysql = config?.dbType === "mysql";
@@ -684,7 +688,7 @@ const tableSql = computed(() => {
 function onGridSort(column: string, direction: "asc" | "desc"): void {
 	const tab = activeTab.value;
 	if (!tab || tab.mode !== "table") return;
-	const dbType = connectionsStore.configs.find(
+	const dbType = connectionsStore.sqlConfigs.find(
 		(entry) => entry.id === tab.connectionId,
 	)?.dbType;
 	// The header's own "clear sort" sends no column, and so does a shortcut on
@@ -748,7 +752,7 @@ const editableTarget = computed(() => {
 const insertTarget = computed(() => {
 	const tab = activeTab.value;
 	if (!tab || tab.mode !== "table") return null;
-	const dbType = connectionsStore.configs.find(
+	const dbType = connectionsStore.sqlConfigs.find(
 		(entry) => entry.id === tab.connectionId,
 	)?.dbType;
 	if (!dbType) return null;
@@ -860,6 +864,8 @@ async function reconnectActive(): Promise<void> {
 				New query tab
 			</Button>
 		</div>
+
+		<RedisWorkspace v-else-if="activeTab.mode === 'redis'" :key="activeTab.id" :tab="activeTab" />
 
 		<!-- A table tab has no editor: the grid takes the whole pane. -->
 		<Splitpanes v-else-if="isTableTab" horizontal class="min-h-0 flex-1">

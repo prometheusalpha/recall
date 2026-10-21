@@ -42,6 +42,7 @@ import {
 	SelectValue,
 } from "../ui/select";
 import ConnectionFormFields from "./ConnectionFormFields.vue";
+import RedisConnectionFields from "./RedisConnectionFields.vue";
 
 const props = defineProps<{
 	open: boolean;
@@ -98,18 +99,36 @@ watch(
 );
 
 function onDbType(value: AcceptableValue) {
-	if (value !== "postgres" && value !== "mysql") return;
+	if (value !== "postgres" && value !== "mysql" && value !== "redis") return;
 	const dbType: DatabaseType = value;
-	if (dbType === draft.value.dbType) return;
-	draft.value = {
-		...draft.value,
-		dbType,
-		port: DEFAULT_PORTS[dbType],
-		username: DEFAULT_USERS[dbType],
-		defaultSchema: dbType === "postgres" ? "public" : "",
-		ssl: false,
-		urlParams: "",
-	};
+	const current = draft.value;
+	if (dbType === current.dbType) return;
+	if (dbType !== "redis" && current.dbType !== "redis") {
+		draft.value = {
+			...current,
+			dbType,
+			port: DEFAULT_PORTS[dbType],
+			username: DEFAULT_USERS[dbType],
+			defaultSchema: dbType === "postgres" ? "public" : "",
+			ssl: false,
+			urlParams: "",
+		};
+	} else {
+		// Crossing engine families: only what every engine shares carries over,
+		// the rest starts from the new family's defaults.
+		const { id, name, host, password, note, savePassword, connectTimeoutSecs } =
+			current;
+		draft.value = {
+			...emptyConnection(dbType),
+			id,
+			name,
+			host,
+			password,
+			note,
+			savePassword,
+			connectTimeoutSecs,
+		};
+	}
 	testResult.value = null;
 	failure.value = "";
 }
@@ -134,7 +153,10 @@ function validate(): boolean {
 	} else if (draft.value.port > 65535) {
 		next.port = "Port must be 65535 or lower.";
 	}
-	if (!draft.value.username.trim()) next.username = "Enter a user.";
+	// Redis without ACLs has no user to name; the `default` one is implied.
+	if (draft.value.dbType !== "redis" && !draft.value.username.trim()) {
+		next.username = "Enter a user.";
+	}
 	errors.value = next;
 	return Object.keys(next).length === 0;
 }
@@ -206,8 +228,8 @@ async function copyFailure() {
       <DialogHeader>
         <DialogTitle>{{ title }}</DialogTitle>
         <DialogDescription>
-          PostgreSQL and MySQL profiles. Passwords stay in memory for this
-          session.
+          PostgreSQL, MySQL and Redis profiles. Passwords stay in memory for
+          this session.
         </DialogDescription>
       </DialogHeader>
 
@@ -227,11 +249,21 @@ async function copyFailure() {
             <SelectItem value="mysql">
               {{ DB_TYPE_LABELS.mysql }}
             </SelectItem>
+            <SelectItem value="redis">
+              {{ DB_TYPE_LABELS.redis }}
+            </SelectItem>
           </SelectContent>
         </Select>
       </div>
 
+      <RedisConnectionFields
+        v-if="draft.dbType === 'redis'"
+        :model-value="draft"
+        :errors="errors"
+        @update:model-value="onDraft"
+      />
       <ConnectionFormFields
+        v-else
         :model-value="draft"
         :errors="errors"
         :databases="availableDatabases"

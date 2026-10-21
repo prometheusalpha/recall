@@ -6,6 +6,7 @@ export default {
 		dev: "hutch scripts/fetch-rg.ts && hutch electrobun prepare && hutch pm exec -- vite build && hutch electrobun dev --watch",
 		"dev:hmr": ["hutch", "pm", "exec", "--", "concurrently", "hutch run hmr", "hutch run start"],
 		hmr: "hutch electrobun prepare && hutch pm exec -- vite --port 5173",
+		"redis:smoke": "hutch scripts/redis-smoke.ts",
 		build: "hutch scripts/fetch-rg.ts && hutch electrobun prepare && hutch pm exec -- vite build && hutch electrobun build --env=stable",
 		"build:canary": "hutch scripts/fetch-rg.ts && hutch electrobun prepare && hutch pm exec -- vite build && hutch electrobun build --env=canary",
 	},

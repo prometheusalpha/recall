@@ -1,12 +1,12 @@
 import type { SQL } from "bun";
 import type {
 	ColumnInfo,
-	ConnectionConfig,
 	DatabaseConnectionInfo,
 	ExplainPlan,
 	ExplainPlanNode,
 	ForeignKeyInfo,
 	IndexInfo,
+	SqlConnectionConfig,
 	TableInfo,
 	TriggerInfo,
 } from "../../shared/types";
@@ -48,7 +48,7 @@ export const mysqlDriver: Driver = {
 	dbType: "mysql",
 	databaseScoped: false,
 
-	buildOptions(cfg: ConnectionConfig): SQLOptions {
+	buildOptions(cfg: SqlConnectionConfig): SQLOptions {
 		const options: SQL.PostgresOrMySQLOptions = {
 			adapter: "mysql",
 			hostname: cfg.host,

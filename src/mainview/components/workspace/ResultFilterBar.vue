@@ -12,7 +12,7 @@
  */
 import { computed, ref, watch } from "vue";
 import { ArrowUpDown, Check, Filter, Minus, TriangleAlert, X } from "lucide-vue-next";
-import type { BackendError, DatabaseType } from "../../../shared/types";
+import type { BackendError, SqlDbType } from "../../../shared/types";
 import { Button } from "../ui/button";
 import ClauseSuggestInput from "./ClauseSuggestInput.vue";
 import {
@@ -38,7 +38,7 @@ const props = withDefaults(
 		/** Declared SQL type per column, parallel to `columns`. */
 		columnTypes?: string[];
 		/** Connection dialect, so a suggested column is inserted quoted only if needed. */
-		dbType?: DatabaseType;
+		dbType?: SqlDbType;
 		/** The subset currently rendered; always a subset of `columns`. */
 		visibleColumns?: string[];
 		/**

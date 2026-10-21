@@ -7,7 +7,7 @@
  * jump points at, so the rule lives here rather than in three callers.
  */
 import type { FileDatasource } from "../../shared/sqlFile";
-import type { ConnectionConfig } from "../../shared/types";
+import type { SqlConnectionConfig } from "../../shared/types";
 
 export interface DatasourceResolution {
 	datasource: FileDatasource;
@@ -19,11 +19,13 @@ export interface DatasourceResolution {
  * Returns null when there is no connection at all, which is the one case where
  * a file cannot be opened. A binding whose connection has since been deleted
  * falls through to the fallback rather than dead-ending on a missing profile.
+ * `configs` is SQL-only: a `.sql` file cannot run against Redis, so neither a
+ * binding nor the fallback may land on one.
  */
 export function resolveFileDatasource(
 	path: string,
 	bindings: Record<string, FileDatasource>,
-	configs: ConnectionConfig[],
+	configs: SqlConnectionConfig[],
 	activeId: string | null,
 ): DatasourceResolution | null {
 	const bound = bindings[path];

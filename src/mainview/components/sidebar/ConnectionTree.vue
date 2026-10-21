@@ -14,7 +14,7 @@ import CustomContextMenu from "../ui/CustomContextMenu.vue";
 import type { ContextMenuItem } from "../ui/CustomContextMenu.vue";
 import { flattenTree } from "../../composables/useFlatTree";
 import type { FlatTreeNode } from "../../composables/useFlatTree";
-import { errorMessage } from "../../lib/rpc";
+import { errorMessage, RPC_TIMEOUTS, rpc } from "../../lib/rpc";
 import { tableGlyph } from "../../lib/tableGlyph";
 import { useToast } from "../../composables/useToast";
 import { isConnectionCancelled, useConnectionsStore } from "../../stores/connections";
@@ -101,6 +101,16 @@ type TreeNode =
 			database: string;
 			schema: string;
 			table: string;
+	  }
+	| {
+			/** A Redis logical database: a leaf here, its keys live in the tab. */
+			kind: "redisDb";
+			key: string;
+			connectionId: string;
+			db: number;
+			/** From `INFO keyspace`, so the row can say which dbs hold anything. */
+			keys: number;
+			label: string;
 	  }
 	| {
 			kind: "leaf";
@@ -281,6 +291,7 @@ const KEY_PREFIX: Record<TreeNode["kind"], string> = {
 	schema: "s",
 	table: "t",
 	group: "g",
+	redisDb: "r",
 	leaf: "l",
 };
 
@@ -352,12 +363,15 @@ const searchFilter = computed(() => parseSearch(searchTerm.value));
  * database is the driver's business.
  */
 async function databaseNodes(connectionId: string): Promise<TreeNode[]> {
+	if (connections.configs.find((entry) => entry.id === connectionId)?.dbType === "redis") {
+		return redisDbNodes(connectionId);
+	}
 	const databases = await connections.listDatabases(connectionId);
 	// The profile's own database is exempt here exactly as it is in the Quick
 	// Open catalog: the dialog refuses to hide it, so only a hand-edited
 	// profile reaches this line with it hidden, and a connection that expands
 	// to nothing is indistinguishable from one that failed.
-	const config = connections.configs.find((entry) => entry.id === connectionId);
+	const config = connections.sqlConfigs.find((entry) => entry.id === connectionId);
 	const hidden = new Set(
 		(config?.hiddenDatabases ?? []).filter((name) => name !== config?.database),
 	);
@@ -370,6 +384,22 @@ async function databaseNodes(connectionId: string): Promise<TreeNode[]> {
 			database: entry.name,
 			label: entry.name,
 		}));
+}
+
+/** Every logical database the server has, numbered as Redis numbers them. */
+async function redisDbNodes(connectionId: string): Promise<TreeNode[]> {
+	const databases = await rpc.request.redisListDatabases(
+		{ connectionId },
+		{ maxRequestTime: RPC_TIMEOUTS.metadata },
+	);
+	return databases.map(({ db, keys }) => ({
+		kind: "redisDb",
+		key: makeKey("redisDb", connectionId, String(db)),
+		connectionId,
+		db,
+		keys,
+		label: `db${db}`,
+	}));
 }
 
 /**
@@ -647,7 +677,7 @@ async function fetchChildren(node: TreeNode, superseded?: () => boolean): Promis
 		} else if (node.kind === "database") {
 			// Postgres nests schemas inside the database; MySQL has no such
 			// layer, so its database opens straight onto its tables.
-			const config = connections.configs.find(
+			const config = connections.sqlConfigs.find(
 				(entry) => entry.id === node.connectionId,
 			);
 			if (config?.dbType === "mysql") {
@@ -739,6 +769,16 @@ function toggle(node: TreeNode): void {
 
 function activate(node: TreeNode): void {
 	if (node.kind === "leaf") return;
+	if (node.kind === "redisDb") {
+		selectedKey.value = node.key;
+		const config = connections.configs.find((entry) => entry.id === node.connectionId);
+		tabs.openRedisTab({
+			connectionId: node.connectionId,
+			db: node.db,
+			connectionName: config?.name ?? "Redis",
+		});
+		return;
+	}
 	if (node.kind === "table") {
 		selectedKey.value = node.key;
 		const tab = tabs.openTableTab({
@@ -1018,6 +1058,10 @@ function rowGlyph(node: TreeNode): { icon?: Component; iconClass: string } {
 		return { icon: databaseIconFor(node.dbType), iconClass: "" };
 	}
 	if (node.kind === "database") return { icon: Database, iconClass: "text-yellow-500" };
+	if (node.kind === "redisDb") {
+		// An empty db is dimmed: most servers list sixteen and use one or two.
+		return { icon: Database, iconClass: node.keys > 0 ? "text-red-500" : "text-muted-foreground" };
+	}
 	if (node.kind === "schema") {
 		return { icon: Folder, iconClass: "text-yellow-500" };
 	}
@@ -1038,6 +1082,7 @@ function rowGlyph(node: TreeNode): { icon?: Component; iconClass: string } {
 const DATABASE_ICONS: Record<DatabaseType, Component> = {
 	postgres: defineComponent(() => () => h(DatabaseIcon, { dbType: "postgres" })),
 	mysql: defineComponent(() => () => h(DatabaseIcon, { dbType: "mysql" })),
+	redis: defineComponent(() => () => h(DatabaseIcon, { dbType: "redis" })),
 };
 
 function databaseIconFor(dbType: DatabaseType): Component {
@@ -1052,6 +1097,7 @@ function databaseIconFor(dbType: DatabaseType): Component {
  */
 function childCountOf(node: TreeNode): number | undefined {
 	if (node.kind === "group") return metaLeaves(node.tableKey, node.group)?.length;
+	if (node.kind === "redisDb") return node.keys;
 	if (!isExpanded(node)) return undefined;
 	// A MySQL database holds tables directly; a Postgres one holds schemas, so
 	// counting its tables would report zero for a database full of them.
@@ -1091,7 +1137,7 @@ function rowBinding(
 			node.kind === "connection" ? "tree-label-connection" : "tree-label-object",
 		// Everything but a leaf expands; a group row opens its list and nothing
 		// else, and the twisty is what invites that click.
-		hasChildren: node.kind !== "leaf",
+		hasChildren: node.kind !== "leaf" && node.kind !== "redisDb",
 		expanded: isExpanded(node),
 		selected: selectedKey.value === node.key,
 		loading: isLoading(node),
@@ -1200,6 +1246,8 @@ function connectionMenuItems(): ContextMenuItem[] {
 			label: "Databases…",
 			icon: Database,
 			disabled: !id,
+			// Hiding databases is a SQL notion; Redis lists its numbered dbs.
+			visible: connections.sqlConfigs.some((entry) => entry.id === id),
 			action: manageDatabases,
 		},
 	];

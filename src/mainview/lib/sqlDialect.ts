@@ -1,5 +1,5 @@
 /**
- * CodeMirror SQL dialects, one per `DatabaseType`.
+ * CodeMirror SQL dialects, one per `SqlDbType`.
  *
  * Both dialects are built with `SQLDialect.define` rather than reusing the
  * library's stock `PostgreSQL`/`MySQL` exports so every field we depend on is
@@ -10,7 +10,7 @@
  * app should have to load CodeMirror to know what a keyword is.
  */
 import { SQLDialect } from "@codemirror/lang-sql";
-import type { DatabaseType } from "../../shared/types";
+import type { SqlDbType } from "../../shared/types";
 import {
 	IDENTIFIER_QUOTES,
 	MYSQL_KEYWORDS,
@@ -50,22 +50,22 @@ const mysqlDialect = SQLDialect.define({
 	hashComments: true,
 });
 
-const DIALECTS: Record<DatabaseType, SQLDialect> = {
+const DIALECTS: Record<SqlDbType, SQLDialect> = {
 	postgres: postgresDialect,
 	mysql: mysqlDialect,
 };
 
-const NAMES: Record<DatabaseType, string> = {
+const NAMES: Record<SqlDbType, string> = {
 	postgres: "PostgreSQL",
 	mysql: "MySQL",
 };
 
 /** The configured CodeMirror dialect for a connection type. */
-export function codeMirrorSqlDialect(dbType: DatabaseType): SQLDialect {
+export function codeMirrorSqlDialect(dbType: SqlDbType): SQLDialect {
 	return DIALECTS[dbType];
 }
 
 /** Human-readable product name, for labels and window titles. */
-export function dialectName(dbType: DatabaseType): string {
+export function dialectName(dbType: SqlDbType): string {
 	return NAMES[dbType];
 }

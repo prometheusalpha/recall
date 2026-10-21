@@ -26,12 +26,14 @@ import type {
 } from "./sqlFile";
 
 import type { FindInFilesRequest, FindInFilesResult } from "./findInFiles";
+
+import type { RedisRequests } from "./redis";
 /**
  * Requests the renderer sends to the Bun process (executed in Bun).
  * One method per driver operation, mirroring the reference app's Tauri command
  * surface but stripped to the postgres + mysql minimum.
  */
-export type BunRequests = {
+type CoreRequests = {
 	/**
 	 * Every stored profile, in sidebar order. `password` always comes back
 	 * empty — the keychain is the only place a secret is kept, and `connect`
@@ -344,6 +346,9 @@ export type BunRequests = {
 		response: void;
 	};
 };
+
+/** Redis requests live beside their types in `./redis`. */
+export type BunRequests = CoreRequests & RedisRequests;
 
 /**
  * Requests the Bun process sends to the renderer (executed in the webview).

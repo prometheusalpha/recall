@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Recall** — a fast desktop SQL client for **PostgreSQL and MySQL**. Built on
+**Recall** — a fast desktop client for **PostgreSQL, MySQL and Redis**. Built on
 **Electrobun 2.0.2**: a **Bun main process** (`src/bun/`) that talks to databases
 and the OS, and a **Vue 3 + Pinia renderer** (`src/mainview/`) running in WebKit.
 Everything is driven by the `hutch` CLI (`hutch.config.ts`), not npm/pnpm/yarn.
@@ -47,8 +47,10 @@ proxy** declared in `src/shared/rpc.ts`:
 
 | Path | Purpose |
 | --- | --- |
-| `src/shared/` | `rpc.ts` (`BunRequests`/`AppRPC`), `types.ts`, `bookmark.ts`, `sqlFile.ts` |
-| `src/bun/drivers/` | `postgres.ts`, `mysql.ts` — **the only** files allowed to know a dialect |
+| `src/shared/` | `rpc.ts` (`BunRequests`/`AppRPC`), `types.ts`, `redis.ts` (Redis types + `RedisRequests`), `bookmark.ts`, `sqlFile.ts` |
+| `src/bun/drivers/` | `postgres.ts`, `mysql.ts` — **the only** files allowed to know a SQL dialect |
+| `src/bun/redis/` | Redis pool (ioredis, one client per logical db), ops, command allowlist, handlers |
+| `src/mainview/components/redis/` | Redis tab: key list, value panel, TTL control, console |
 | `src/bun/` | `handlers.ts`, `rpc.ts`, `connectionPool.ts`, `driver.ts`, `appDb.ts`, `connectionStore.ts`, `bookmarkStore.ts`, `credentialStore.ts`, `sqlFiles.ts`, `menu.ts`, `index.ts` |
 | `src/mainview/stores/` | 6 Pinia setup stores: `connections`, `tabs`, `query`, `sqlFiles`, `bookmarks`, `snippets` |
 | `src/mainview/composables/` | `useQuickOpen`, `useGridSelection`, `useToast`, `useTheme`, `useUiScale`, `usePanelResize`, `useFlatTree` |
@@ -115,6 +117,11 @@ hutch pm exec -- vite build       # renderer-only build, output to dist/
 3. **All dialect knowledge lives in the `Driver` interface** (`src/bun/driver.ts`).
    No other module may branch on `dbType` or spell out `information_schema`.
    Add a `Driver` member instead.
+   Engine *families* are the one exception: `ConnectionConfig` is the union
+   `SqlConnectionConfig | RedisConnectionConfig`, and code may branch on
+   `dbType === "redis"` once, at the family boundary (connect, test, the tree,
+   the workspace). SQL-only code takes `SqlConnectionConfig` / `SqlDbType` and
+   reads `connections.sqlConfigs`, so the compiler keeps Redis out of it.
 4. **`src/mainview/lib/sqlSplit.ts` mirrors `splitStatements` in
    `src/bun/driver.ts`** and the two must stay byte-for-byte compatible in their
    scanning rules. Change both in the same commit. Same rule for

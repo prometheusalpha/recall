@@ -12,7 +12,7 @@ import {
 	Scissors,
 	Trash2,
 } from "lucide-vue-next";
-import type { ConnectionConfig } from "../../../shared/types";
+import type { SqlConnectionConfig } from "../../../shared/types";
 import type { FileDatasource, SqlFileNode } from "../../../shared/sqlFile";
 import { toast } from "../../composables/useToast";
 import { errorMessage } from "../../lib/rpc";
@@ -141,12 +141,12 @@ const hasFolders = computed(() => sqlFiles.folders.length > 0);
 
 /** One connection paired with one database it can open, for the submenu. */
 interface DatasourceChoice {
-	connection: ConnectionConfig;
+	connection: SqlConnectionConfig;
 	database: string;
 }
 
 const datasourceChoices = computed<DatasourceChoice[]>(() =>
-	connections.configs.flatMap((connection) => {
+	connections.sqlConfigs.flatMap((connection) => {
 		// A connection's own database is the one it is configured against; the
 		// server-reported current database is the other one it can be at.
 		const databases = new Set([connection.database]);
@@ -258,17 +258,17 @@ function resolveDatasource(path: string): FileDatasource | null {
 	const resolution = resolveFileDatasource(
 		path,
 		sqlFiles.bindings,
-		connections.configs,
+		connections.sqlConfigs,
 		connections.activeId,
 	);
 	if (!resolution) return null;
 	if (resolution.usedFallback && !warnedFallbacks.has(path)) {
 		warnedFallbacks.add(path);
-		const active = connections.configs.find(
+		const active = connections.sqlConfigs.find(
 			(c) => c.id === connections.activeId,
 		);
 		toast(
-			`No datasource bound to this file — using ${(active ?? connections.configs[0]).name}. Set one from the toolbar above the editor.`,
+			`No datasource bound to this file — using ${(active ?? connections.sqlConfigs[0]).name}. Set one from the toolbar above the editor.`,
 			6000,
 		);
 	}

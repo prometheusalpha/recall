@@ -12,10 +12,10 @@
  * exercised without either runtime loaded.
  */
 import type { SqlLanguage } from "sql-formatter";
-import type { DatabaseType } from "../../shared/types";
+import type { SqlDbType } from "../../shared/types";
 
-/** `sql-formatter`'s id for each `DatabaseType` the app can run against. */
-const LANGUAGES: Record<DatabaseType, SqlLanguage> = {
+/** `sql-formatter`'s id for each `SqlDbType` the app can run against. */
+const LANGUAGES: Record<SqlDbType, SqlLanguage> = {
 	postgres: "postgresql",
 	mysql: "mysql",
 };
@@ -34,7 +34,7 @@ const LANGUAGES: Record<DatabaseType, SqlLanguage> = {
  */
 export async function formatSqlText(
 	sql: string,
-	dbType: DatabaseType,
+	dbType: SqlDbType,
 ): Promise<string> {
 	const { format } = await import("sql-formatter");
 	return format(sql, { language: LANGUAGES[dbType] });

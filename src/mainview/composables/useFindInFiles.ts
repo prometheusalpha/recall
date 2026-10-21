@@ -127,7 +127,7 @@ export function useFindInFiles() {
 				const resolution = resolveFileDatasource(
 					row.path,
 					sqlFiles.bindings,
-					connections.configs,
+					connections.sqlConfigs,
 					connections.activeId,
 				);
 				if (!resolution) {

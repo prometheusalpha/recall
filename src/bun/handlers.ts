@@ -1,6 +1,7 @@
 import { SQL } from "bun";
 import { join } from "node:path";
 import type { Bookmark } from "../shared/bookmark";
+import type { RedisRequests } from "../shared/redis";
 import type { BunRequests } from "../shared/rpc";
 import type {
 	ConnectionConfig,
@@ -27,9 +28,16 @@ import {
 	getConnection,
 	getServerConnection,
 	loadCredential,
+	onConnectionLost,
 	openConnection,
 	saveCredential,
 } from "./connectionPool";
+import {
+	closeRedis,
+	onRedisConnectionLost,
+	openRedis,
+	testRedis,
+} from "./redis/pool";
 import {
 	createSqlEntry,
 	deleteSqlEntry,
@@ -56,8 +64,16 @@ import {
 } from "./pinStore";
 type Params<K extends keyof BunRequests> = BunRequests[K]["params"];
 
-/** Re-exported so `rpc.ts` can forward the push without importing the pool. */
-export { onConnectionLost as onConnectionLostEmitter } from "./connectionPool";
+/**
+ * Connection loss from either pool, so `rpc.ts` forwards one push without
+ * knowing that SQL and Redis sessions live apart.
+ */
+export function onConnectionLostEmitter(
+	listener: (connectionId: string, reason: string) => void,
+): () => void {
+	const unsubscribers = [onConnectionLost(listener), onRedisConnectionLost(listener)];
+	return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+}
 
 /**
  * Per-statement progress push. Set by `rpc.ts`, which owns the transport;
@@ -293,6 +309,13 @@ export const handlers = {
 	},
 
 	async testConnection({ config }: Params<"testConnection">) {
+		if (config.dbType === "redis") {
+			const result = await testRedis(config);
+			if (result.ok && config.savePassword && config.password) {
+				await saveCredential(config.id, config.username, config.password);
+			}
+			return result;
+		}
 		const result: ConnectionTestResult = {
 			ok: false,
 			message: "",
@@ -386,6 +409,9 @@ export const handlers = {
 			// The user turned saving off; do not leave an older secret behind.
 			await forgetStoredCredential(resolved.id, resolved.username);
 		}
+		if (resolved.dbType === "redis") {
+			return { connectionId: resolved.id, databaseInfo: await openRedis(resolved) };
+		}
 		const live = await openConnection(resolved, true);
 		return {
 			connectionId: live.config.id,
@@ -401,7 +427,8 @@ export const handlers = {
 	},
 
 	async disconnect({ connectionId }: Params<"disconnect">): Promise<void> {
-		await closeConnection(connectionId);
+		// Both pools: closing an id a pool never opened is a no-op.
+		await Promise.all([closeConnection(connectionId), closeRedis(connectionId)]);
 	},
 
 	async listDatabases({ connectionId }: Params<"listDatabases">) {
@@ -692,6 +719,7 @@ export const handlers = {
 		| "pickFolder"
 		| "revealInFolder"
 		| "setUiScale"
+		| keyof RedisRequests
 		? never
 		: K]: (
 		params: BunRequests[K]["params"],

@@ -55,11 +55,13 @@ const filter = ref("");
 const loading = ref(false);
 const failure = ref("");
 
-const config = computed(() =>
-	props.connectionId
-		? connections.configs.find((entry) => entry.id === props.connectionId)
-		: undefined,
-);
+/** SQL only: a Redis profile has numbered databases and nothing to hide. */
+const config = computed(() => {
+	const entry = connections.configs.find(
+		(candidate) => candidate.id === props.connectionId,
+	);
+	return entry?.dbType === "redis" ? undefined : entry;
+});
 
 /** The names kept out of the sidebar, as a lookup for the row switches. */
 const hidden = computed(() => new Set(config.value?.hiddenDatabases ?? []));
@@ -122,7 +124,7 @@ function setHidden(name: string, isHidden: boolean): void {
 	const next = new Set(current.hiddenDatabases);
 	if (isHidden) next.add(name);
 	else next.delete(name);
-	connections.update(id, { hiddenDatabases: [...next] });
+	connections.setHiddenDatabases(id, [...next]);
 	// The palette's catalog was discovered with the previous list. Without this
 	// a database hidden now stays searchable for the rest of its TTL.
 	catalog.invalidate(id);
@@ -149,7 +151,7 @@ function hideAll(): void {
 function applyAll(names: string[]): void {
 	const id = props.connectionId;
 	if (!id || !config.value) return;
-	connections.update(id, { hiddenDatabases: names });
+	connections.setHiddenDatabases(id, names);
 	catalog.invalidate(id);
 	emit("changed", id);
 }

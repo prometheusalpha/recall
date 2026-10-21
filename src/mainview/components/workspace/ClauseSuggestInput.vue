@@ -24,7 +24,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { Component } from "vue";
 import { ChevronDown, X } from "lucide-vue-next";
-import type { DatabaseType } from "../../../shared/types";
+import type { SqlDbType } from "../../../shared/types";
 import {
 	clauseConnectors,
 	clauseFieldSuggestions,
@@ -66,7 +66,7 @@ const props = withDefaults(
 		 * Connection dialect, so a name the dialect cannot take bare is inserted
 		 * quoted. Undefined leaves every name bare.
 		 */
-		dbType?: DatabaseType;
+		dbType?: SqlDbType;
 		/** Emitted on every accepted suggestion, so the parent can apply. */
 		commitOnPick?: boolean;
 		/** The last run was rejected at this clause, so the frame turns red. */

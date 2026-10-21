@@ -10,7 +10,7 @@
  */
 import { ref, watch, type Ref } from "vue";
 import type {
-	ConnectionConfig,
+	SqlConnectionConfig,
 	DatabaseInfo,
 	TableInfo,
 } from "../../shared/types";
@@ -142,7 +142,7 @@ function anyTablesCached(): boolean {
  * was unfindable by name. Cost is bounded by {@link MAX_CONCURRENT_DATABASES}.
  */
 function databasesToChase(
-	config: ConnectionConfig,
+	config: SqlConnectionConfig,
 	found: DatabaseInfo[],
 ): string[] {
 	const names = found
@@ -169,7 +169,7 @@ function databasesToChase(
  * rows and no error, so the fallback is the difference between "no such schema"
  * and "your tables are right here".
  */
-function schemasToChase(config: ConnectionConfig, found: string[]): string[] {
+function schemasToChase(config: SqlConnectionConfig, found: string[]): string[] {
 	const own = config.defaultSchema || "public";
 	const names = found.length > 0 ? found : [own];
 	const ordered = names.includes(own)
@@ -289,7 +289,7 @@ export function useTableCatalog(): TableCatalog {
 	 * session the pool opens for it, which the sidebar then reuses.
 	 */
 	async function discover(
-		config: ConnectionConfig,
+		config: SqlConnectionConfig,
 		catalog: DiscoveredCatalog,
 	): Promise<string | null> {
 		const connectionId = config.id;
@@ -327,7 +327,7 @@ export function useTableCatalog(): TableCatalog {
 
 	/** One database's schemas and their tables. Never throws. */
 	async function walkDatabase(
-		config: ConnectionConfig,
+		config: SqlConnectionConfig,
 		catalog: DiscoveredCatalog,
 		connectionId: string,
 		database: string,
@@ -370,7 +370,7 @@ export function useTableCatalog(): TableCatalog {
 			known !== undefined && Date.now() - known.fetchedAt < CATALOG_TTL_MS;
 		if (known?.complete && fresh) return;
 		if (inFlight.has(connectionId)) return;
-		const config = connections.configs.find((entry) => entry.id === connectionId);
+		const config = connections.sqlConfigs.find((entry) => entry.id === connectionId);
 		if (!config) return;
 
 		// A half-answered record is re-walked and kept — `cacheScope` skips what
@@ -441,7 +441,7 @@ export function useTableCatalog(): TableCatalog {
 		schema: string,
 	): Promise<void> {
 		if (!connectionId || !database) return;
-		const config = connections.configs.find((entry) => entry.id === connectionId);
+		const config = connections.sqlConfigs.find((entry) => entry.id === connectionId);
 		if (!config) return;
 		const known = catalogs.get(connectionId);
 		const fresh =
@@ -478,7 +478,7 @@ export function useTableCatalog(): TableCatalog {
 		if (reportFanOutFired || anyTablesCached() || fetchErrors.size === 0) return;
 		reportFanOutFired = true;
 		const failed = fetchErrors.size;
-		const configs = connections.configs.length;
+		const configs = connections.sqlConfigs.length;
 		// One reason, not `failed` of them: they are near-certainly all the same
 		// cause, and a stacked list is unreadable in a 4s toast.
 		const [first] = [...fetchErrors.values()];

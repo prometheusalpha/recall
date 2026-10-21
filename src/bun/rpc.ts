@@ -8,6 +8,7 @@ import {
 	setProgressEmitter,
 } from "./handlers";
 import { setRipgrepPath } from "./findInFiles";
+import { redisHandlers } from "./redis/handlers";
 
 
 /**
@@ -83,8 +84,8 @@ const nativeHandlers = {
 	},
 };
 
-/** The full `BunRequests` surface: testable core plus the native handlers. */
-export const handlers = { ...coreHandlers, ...nativeHandlers };
+/** The full `BunRequests` surface: testable core, Redis, and the native handlers. */
+export const handlers = { ...coreHandlers, ...redisHandlers, ...nativeHandlers };
 
 export const rpc = BrowserView.defineRPC<AppRPC>({
 	handlers: { requests: handlers },

@@ -33,7 +33,7 @@ import { formatSqlText } from "../../lib/formatSql";
 import { splitSqlStatements } from "../../lib/sqlSplit";
 import { statementAt } from "../../lib/statementAt";
 import { errorMessage, rpc, RPC_TIMEOUTS } from "../../lib/rpc";
-import type { ConnectionConfig, DatabaseType } from "../../../shared/types";
+import type { SqlConnectionConfig, SqlDbType } from "../../../shared/types";
 import type * as CmView from "@codemirror/view";
 import type * as CmState from "@codemirror/state";
 import type * as CmCommands from "@codemirror/commands";
@@ -343,10 +343,10 @@ const statementCount = computed(() =>
 /** Table tabs render as a read-only view; query tabs are editable. */
 const readOnly = computed(() => activeTab.value?.mode === "table");
 
-const dbType = computed<DatabaseType>(() => {
+const dbType = computed<SqlDbType>(() => {
 	const connectionId = activeTab.value?.connectionId;
 	const config = connectionId
-		? connectionsStore.configs.find((entry) => entry.id === connectionId)
+		? connectionsStore.sqlConfigs.find((entry) => entry.id === connectionId)
 		: undefined;
 	return config?.dbType ?? "postgres";
 });
@@ -603,8 +603,8 @@ const datasourceOpen = ref(false);
 const databasesByConnection = ref<Record<string, string[]>>({});
 const loadingConnections = new Set<string>();
 
-const currentConnection = computed<ConnectionConfig | undefined>(() =>
-	connectionsStore.configs.find(
+const currentConnection = computed<SqlConnectionConfig | undefined>(() =>
+	connectionsStore.sqlConfigs.find(
 		(entry) => entry.id === activeTab.value?.connectionId,
 	),
 );
@@ -623,7 +623,7 @@ const datasourceLabel = computed(() => {
  * arrives — and for a connection that cannot be reached — the profile's own
  * database and the one the server last reported are still worth offering.
  */
-function databasesFor(connection: ConnectionConfig): string[] {
+function databasesFor(connection: SqlConnectionConfig): string[] {
 	const listed = databasesByConnection.value[connection.id];
 	if (listed) return listed;
 	const fallback = new Set([connection.database]);
@@ -634,7 +634,7 @@ function databasesFor(connection: ConnectionConfig): string[] {
 
 /** True when a (connection, database) pair is what this tab already runs on. */
 function isCurrentTarget(
-	connection: ConnectionConfig,
+	connection: SqlConnectionConfig,
 	database: string,
 ): boolean {
 	return (
@@ -643,7 +643,7 @@ function isCurrentTarget(
 	);
 }
 
-async function loadDatabases(connection: ConnectionConfig): Promise<void> {
+async function loadDatabases(connection: SqlConnectionConfig): Promise<void> {
 	if (
 		databasesByConnection.value[connection.id] ||
 		loadingConnections.has(connection.id)
@@ -675,7 +675,7 @@ async function loadDatabases(connection: ConnectionConfig): Promise<void> {
  * `public` as the fallback only when the list is empty or unreachable.
  */
 async function schemaFor(
-	connection: ConnectionConfig,
+	connection: SqlConnectionConfig,
 	database: string,
 ): Promise<string> {
 	if (connection.dbType === "mysql") return database;
@@ -699,7 +699,7 @@ async function schemaFor(
  * connection and database.
  */
 async function chooseDatasource(
-	connection: ConnectionConfig,
+	connection: SqlConnectionConfig,
 	database: string,
 ): Promise<void> {
 	const tab = activeTab.value;
@@ -930,7 +930,7 @@ interface EditorHandle {
 	/** Replaces the whole document with another tab's SQL. */
 	swapTo(tabId: string, sql: string): void;
 	/** Re-points the language compartment at a database type. */
-	setLanguage(next: DatabaseType): void;
+	setLanguage(next: SqlDbType): void;
 	/** Re-points the theme compartment at the light or dark defaults. */
 	setTheme(dark: boolean): void;
 	/** Flips the read-only compartment. */
@@ -1318,7 +1318,7 @@ async function mountEditor(): Promise<void> {
 	 * has to follow the app theme rather than being pinned at mount.
 	 */
 	const themeCompartment = new S.Compartment();
-	const sqlLanguage = (type: DatabaseType) =>
+	const sqlLanguage = (type: SqlDbType) =>
 		langSql.sql({ dialect: dialect.codeMirrorSqlDialect(type) });
 
 	const readOnlyConfig = (locked: boolean) => [
@@ -1608,7 +1608,7 @@ async function mountEditor(): Promise<void> {
 			});
 			editorView.focus();
 		},
-		setLanguage(next: DatabaseType) {
+		setLanguage(next: SqlDbType) {
 			editorView.dispatch({
 				effects: languageCompartment.reconfigure(sqlLanguage(next)),
 			});
@@ -1909,7 +1909,7 @@ watch(
 			<!-- Datasource: which connection and database this document runs
 			     against, and where that choice is changed. It sits on the right
 			     because it belongs to the document, not to the statement bar. -->
-			<DropdownMenu v-if="connectionsStore.configs.length > 0" v-model:open="datasourceOpen">
+			<DropdownMenu v-if="connectionsStore.sqlConfigs.length > 0" v-model:open="datasourceOpen">
 				<DropdownMenuTrigger as-child>
 					<Button
 						variant="ghost"
@@ -1926,7 +1926,7 @@ watch(
 					<DropdownMenuLabel>Run against</DropdownMenuLabel>
 					<div class="max-h-[min(60vh,24rem)] overflow-y-auto overscroll-contain">
 						<DropdownMenuSub
-							v-for="connection in connectionsStore.configs"
+							v-for="connection in connectionsStore.sqlConfigs"
 							:key="connection.id"
 						>
 							<DropdownMenuSubTrigger
