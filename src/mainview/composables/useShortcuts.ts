@@ -36,7 +36,10 @@ export type CommandId =
 	| "tab.closeAll"
 	| "tab.next"
 	| "tab.prev"
+	| "tab.nextAlt"
+	| "tab.prevAlt"
 	| "quickOpen.toggle"
+	| "findInFiles.toggle"
 	| "editor.formatSql"
 	| "editor.explainPlan"
 	| "result.sortAsc"
@@ -101,11 +104,34 @@ export const SHORTCUT_COMMANDS: CommandDefinition[] = [
 		group: "Tabs",
 		defaultBinding: accel("ArrowLeft", false, true),
 	},
+	/*
+	 * A second chord for the same step, since a command holds one binding.
+	 * Real Control on every platform rather than `accel`: Ctrl+Tab is the
+	 * browser/editor convention, and ⌘Tab belongs to the macOS app switcher.
+	 */
+	{
+		id: "tab.nextAlt",
+		label: "Next tab (alt)",
+		group: "Tabs",
+		defaultBinding: { key: "Tab", meta: false, ctrl: true, shift: false, alt: false },
+	},
+	{
+		id: "tab.prevAlt",
+		label: "Previous tab (alt)",
+		group: "Tabs",
+		defaultBinding: { key: "Tab", meta: false, ctrl: true, shift: true, alt: false },
+	},
 	{
 		id: "quickOpen.toggle",
 		label: "Quick open",
 		group: "View",
 		defaultBinding: accel("p"),
+	},
+	{
+		id: "findInFiles.toggle",
+		label: "Find in files",
+		group: "View",
+		defaultBinding: accel("f", true),
 	},
 	/*
 	 * Formatting needs the caret and the selection, so it is the editor that
@@ -297,6 +323,7 @@ const ARROWS: Record<string, string> = {
 	ArrowRight: "→",
 	ArrowUp: "↑",
 	ArrowDown: "↓",
+	Tab: "⇥",
 };
 
 /** A single letter prints uppercase; a named key prints as macOS writes it. */

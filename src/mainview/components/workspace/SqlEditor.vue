@@ -935,8 +935,11 @@ interface EditorHandle {
 	setTheme(dark: boolean): void;
 	/** Flips the read-only compartment. */
 	setReadOnly(next: boolean): void;
-	/** Moves the caret to a one-based line and scrolls it to the middle. */
-	goToLine(line: number): void;
+	/**
+	 * Moves the caret to a one-based line and scrolls it to the middle. With a
+	 * column (0-based) and length, selects that span of the line instead.
+	 */
+	goToLine(line: number, column?: number, length?: number): void;
 	/** The one-based line the caret is on. */
 	currentLine(): number;
 	/** The text of a one-based line, which is what a bookmark is digested from. */
@@ -1620,13 +1623,16 @@ async function mountEditor(): Promise<void> {
 				effects: readOnlyCompartment.reconfigure(readOnlyConfig(next)),
 			});
 		},
-		goToLine(line: number) {
+		goToLine(line: number, column = 0, length = 0) {
 			const target = editorView.state.doc.line(
 				Math.min(Math.max(line, 1), editorView.state.doc.lines),
 			);
+			// Clamped: the tab may hold an unsaved buffer that no longer matches
+			// the file the column was found in.
+			const anchor = Math.min(target.from + column, target.to);
 			editorView.dispatch({
-				selection: { anchor: target.from },
-				effects: V.EditorView.scrollIntoView(target.from, { y: "center" }),
+				selection: { anchor, head: Math.min(anchor + length, target.to) },
+				effects: V.EditorView.scrollIntoView(anchor, { y: "center" }),
 			});
 			editorView.focus();
 		},
@@ -1725,7 +1731,7 @@ async function mountEditor(): Promise<void> {
 		// it up when that tab activates.
 		const jump = bookmarksStore.pendingJump;
 		if (jump?.tabId === initialTab.id) {
-			editor.goToLine(jump.line);
+			editor.goToLine(jump.line, jump.column, jump.length);
 			bookmarksStore.pendingJump = null;
 		}
 		editorView.focus();
@@ -1789,7 +1795,7 @@ watch(activeTabId, (tabId) => {
 	// resolved against the document the swap installed.
 	const jump = bookmarksStore.pendingJump;
 	if (jump?.tabId === tabId) {
-		editor.goToLine(jump.line);
+		editor.goToLine(jump.line, jump.column, jump.length);
 		bookmarksStore.pendingJump = null;
 	}
 });
@@ -1815,7 +1821,7 @@ watch(
 	() => bookmarksStore.pendingJump,
 	(jump) => {
 		if (jump && jump.tabId === activeTabId.value) {
-			editor?.goToLine(jump.line);
+			editor?.goToLine(jump.line, jump.column, jump.length);
 			bookmarksStore.pendingJump = null;
 		}
 	},

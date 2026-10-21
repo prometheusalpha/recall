@@ -10,9 +10,11 @@ import AppToolbar from "./components/layout/AppToolbar.vue";
 import ToastHost from "./components/layout/ToastHost.vue";
 import SnippetsSettings from "./components/editor/SnippetsSettings.vue";
 import QuickOpenDialog from "./components/quickopen/QuickOpenDialog.vue";
+import FindInFilesDialog from "./components/findinfiles/FindInFilesDialog.vue";
 import KeyboardShortcutsSettings from "./components/layout/KeyboardShortcutsSettings.vue";
 import TabCloseDialog from "./components/workspace/TabCloseDialog.vue";
 import { useQuickOpen } from "./composables/useQuickOpen";
+import { useFindInFiles } from "./composables/useFindInFiles";
 import { Button } from "./components/ui/button";
 import {
 	Select,
@@ -129,6 +131,7 @@ const settingsOpen = ref(false);
 const snippetsOpen = ref(false);
 const shortcutsOpen = ref(false);
 const quickOpen = useQuickOpen();
+const findInFiles = useFindInFiles();
 const tabClose = useTabClose();
 const { match } = useShortcuts();
 
@@ -198,11 +201,14 @@ function registerShortcutCommands(): void {
 	});
 	registerCommand("tab.next", () => stepTab(1));
 	registerCommand("tab.prev", () => stepTab(-1));
+	registerCommand("tab.nextAlt", () => stepTab(1));
+	registerCommand("tab.prevAlt", () => stepTab(-1));
 	// Cmd/Ctrl+P is the print shortcut in every browser context, so the
 	// palette takes it and the webview never sees the key.
 	registerCommand("quickOpen.toggle", () => {
 		quickOpen.open.value = !quickOpen.open.value;
 	});
+	registerCommand("findInFiles.toggle", () => findInFiles.toggle());
 	// The WHERE box lives inside a grid this shell cannot reach, so the command
 	// asks the one grid on screen to move focus. It answers `false` when the
 	// result has no filter bar (a query tab), and `runCommand` then leaves the
@@ -340,6 +346,7 @@ onBeforeUnmount(() => {
 		<SnippetsSettings v-model:open="snippetsOpen" />
 		<KeyboardShortcutsSettings v-model:open="shortcutsOpen" />
 		<QuickOpenDialog />
+		<FindInFilesDialog />
 
 		<Dialog v-model:open="settingsOpen">
 			<DialogContent class="sm:max-w-md">

@@ -46,7 +46,7 @@ const DEFAULT_FILTER = "*";
  * Directories that are never interesting for SQL browsing and are often huge
  * enough (tens of thousands of entries) to stall a scan. Skipped outright.
  */
-const IGNORE_DIRS = new Set([
+export const IGNORE_DIRS = new Set([
 	".git",
 	"node_modules",
 	".venv",

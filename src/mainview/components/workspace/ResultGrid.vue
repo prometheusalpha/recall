@@ -45,6 +45,7 @@ import {
 	useGridSelection,
 	type GridNavigationDirection,
 } from "../../composables/useGridSelection";
+import { useColumnWindow } from "../../composables/useColumnWindow";
 import { useGridFont } from "../../composables/useGridFont";
 import { useShortcuts } from "../../composables/useShortcuts";
 import { registerResultFilterFocus } from "../../composables/useResultFilterFocus";
@@ -63,6 +64,8 @@ import ResultFilterBar from "./ResultFilterBar.vue";
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
 const ROW_NUMBER_WIDTH = 56;
+/** Px of columns rendered past each side of the viewport, like the scroller's row `buffer`. */
+const COLUMN_WINDOW_BUFFER = 600;
 /** Fallback width for a column with no measurement and no override. */
 const DEFAULT_COLUMN_WIDTH = 160;
 /**
@@ -480,6 +483,7 @@ watch(
 		if (!(element instanceof HTMLElement)) return;
 		scrollerResizeObserver = new ResizeObserver(() => {
 			measureScrollbarGutter();
+			updateColumnWindow();
 			// The box is placed against the body's box, so a pane that changed
 			// size has to move it before the next selection does.
 			measureBodyBox();
@@ -660,14 +664,11 @@ const selection = useGridSelection({
 /**
  * The sum over the SELECTED RECTANGLE, or `null` when there is no selection —
  * so the statusbar renders nothing at all rather than a misleading `Sum 0`.
- * Non-numeric cells (NULL, text, JSON) are SKIPPED and counted rather than
- * coerced, and the raw value is read through `cellAt` instead of the formatted
- * text, because separators or a suffix in a display string would make a
- * perfectly good number look non-numeric.
- *
- * The declared column type travels with each cell: `Bun.SQL` returns a Postgres
- * `numeric`/`bigint`/`money` as a string, and without the type `sumCells` would
- * skip the whole column.
+ * Any cell that parses to a number counts, whatever its column type; the rest
+ * (NULL, JSON, non-numeric text) are SKIPPED and counted. The raw value is read
+ * through `cellAt` instead of the formatted text, because separators or a
+ * suffix in a display string would make a perfectly good number look
+ * non-numeric. The column type only travels along to unwrap `money` text.
  */
 const selectionSum = computed<ReturnType<typeof sumCells> | null>(() => {
 	const r = selection.range.value;
@@ -1125,6 +1126,20 @@ function sortIcon(column: string): "asc" | "desc" | null {
 /** The cell being edited, or null. Editing is deliberately not in the store. */
 const editing = ref<{ row: number; col: number; draft: string } | null>(null);
 const editorEl = ref<HTMLInputElement | null>(null);
+
+// The open editor stays rendered: scrolling it out of the window would unmount
+// the focused input mid-edit and take keyboard focus with it.
+const columnWindow = useColumnWindow({
+	widths: () => columns.value.map(widthFor),
+	gutter: ROW_NUMBER_WIDTH,
+	buffer: COLUMN_WINDOW_BUFFER,
+	pinnedColumn: () => editing.value?.col ?? null,
+});
+
+function updateColumnWindow(): void {
+	const body = scrollerNode();
+	if (body) columnWindow.update(body.scrollLeft, body.clientWidth);
+}
 
 /**
  * The text a visible column shows for a row.
@@ -1834,6 +1849,7 @@ watch(selection.focus, () => {
  */
 function onBodyScroll(): void {
 	syncHeaderScroll();
+	updateColumnWindow();
 	if (peekCell.value === null) return;
 	const body = scrollerNode();
 	if (body) bodyScroll.value = { top: body.scrollTop, left: body.scrollLeft };
@@ -2082,7 +2098,7 @@ function rowKey(_row: unknown, index: number): number {
 				:aria-colcount="columns.length + 1"
 				aria-label="Query results"
 				tabindex="0"
-				:aria-activedescendant="selection.focus.value ? `cell-${selection.focus.value.row}-${selection.focus.value.col}` : undefined"
+				:aria-activedescendant="selection.focus.value && columnWindow.isRendered(selection.focus.value.col) ? `cell-${selection.focus.value.row}-${selection.focus.value.col}` : undefined"
 				@click="gridFocused = true"
 				@focus="gridFocused = true"
 				@blur="gridFocused = false"
@@ -2114,17 +2130,24 @@ function rowKey(_row: unknown, index: number): number {
 								     one row's cell with another row's number. -->
 								<TooltipContent class="max-w-lg">{{ rowNumberLabel(index) }}</TooltipContent>
 							</Tooltip>
+							<!-- Stands in for the columns scrolled off to the left; see `useColumnWindow`. -->
+							<div
+								v-if="columnWindow.range.value.before > 0"
+								class="shrink-0"
+								:style="{ width: `${columnWindow.range.value.before}px` }"
+							/>
 							<!-- Hover is reported here rather than left to the
 							     primitive's own trigger: the tooltip that answers is
 							     one parked instance, and this is where the row/col it
 							     re-reads comes from. -->
 							<div
-								v-for="(column, columnIndex) in columns"
-								:key="column"
+								v-for="columnIndex in columnWindow.renderedColumns.value"
+								:key="columns[columnIndex]"
 								:id="`cell-${index}-${columnIndex}`"
 								class="grid-cell"
 								role="cell"
-								:style="cellStyleFor(column)"
+								:aria-colindex="columnIndex + 2"
+								:style="cellStyleFor(columns[columnIndex] ?? '')"
 								:data-row="index"
 								:data-col="columnIndex"
 								:data-null="isNullAt(index, columnIndexes[columnIndex] ?? 0)"
@@ -2226,9 +2249,8 @@ function rowKey(_row: unknown, index: number): number {
 						{{ selection.selectedCellCount.value }} cells selected
 					</span>
 					<!-- The sum is over the SELECTED RECTANGLE only, and
-					     non-numeric cells are skipped, never coerced — so the
-					     skipped count is stated: a total that quietly dropped
-					     a column of digits-as-text would read as arithmetic. -->
+					     cells that do not parse to a number are skipped — so
+					     the skipped count is stated rather than hidden. -->
 					<span
 						v-if="selectionSum !== null"
 						class="shrink-0 tabular-nums"

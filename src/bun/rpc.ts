@@ -1,4 +1,5 @@
-import { BrowserView } from "electrobun/main";
+import { join } from "node:path";
+import { BrowserView, PATHS } from "electrobun/main";
 import { openFileDialog, showItemInFolder } from "electrobun/main/utils";
 import type { AppRPC } from "../shared/rpc";
 import {
@@ -6,6 +7,7 @@ import {
 	onConnectionLostEmitter,
 	setProgressEmitter,
 } from "./handlers";
+import { setRipgrepPath } from "./findInFiles";
 
 
 /**
@@ -91,6 +93,9 @@ export const rpc = BrowserView.defineRPC<AppRPC>({
 setProgressEmitter((payload) => {
 	rpc.send("queryProgress", payload);
 });
+
+// Copied there by `build.copy` in electrobun.config.ts.
+setRipgrepPath(join(PATHS.RESOURCES_FOLDER, "app", "bin", "rg"));
 
 onConnectionLostEmitter((connectionId, reason) => {
 	rpc.send("connectionLost", { connectionId, reason });

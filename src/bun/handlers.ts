@@ -39,6 +39,7 @@ import {
 	transferSqlEntries,
 	writeSqlFile,
 } from "./sqlFiles";
+import { findInFiles } from "./findInFiles";
 import {
 	listConnections as listStoredConnections,
 	saveConnections as saveStoredConnections,
@@ -680,6 +681,10 @@ export const handlers = {
 		move,
 	}: Params<"transferSqlEntries">) {
 		return transferSqlEntries(sources, destination, move);
+	},
+
+	async findInFiles(request: Params<"findInFiles">) {
+		return findInFiles(request);
 	},
 
 } satisfies {

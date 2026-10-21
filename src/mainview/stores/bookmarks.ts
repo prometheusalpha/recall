@@ -24,6 +24,9 @@ import { useTabsStore } from "./tabs";
 interface PendingJump {
 	tabId: string;
 	line: number;
+	/** Find in Files selects the hit: 0-based column and its length. */
+	column?: number;
+	length?: number;
 }
 
 export const useBookmarksStore = defineStore("bookmarks", () => {

@@ -16,9 +16,10 @@
  * of that reading lives in `lib/clauseSuggestion`, which keeps this file about
  * the input, the list and the keyboard.
  *
- * Enter runs the clause, as it does anywhere else in this band; Tab or a click
- * accepts a row. Completion never shares a keystroke with the commit, so a list
- * sitting under the field can never rewrite the fragment being applied.
+ * Tab or a click accepts a row. Enter accepts a COLUMN row while the list is
+ * offering one, and otherwise runs the clause; an `AND`/`OR` list never takes
+ * Enter, because it opens right after a complete expression — exactly when the
+ * user means to run it.
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { Component } from "vue";
@@ -42,6 +43,7 @@ interface SuggestionRow {
 	value: string;
 	insertText: string;
 	detail: string;
+	connector: boolean;
 }
 
 const props = withDefaults(
@@ -141,6 +143,7 @@ function rowsFor(value: string, start: number, end: number): SuggestionRow[] {
 			value: keyword,
 			insertText: keyword,
 			detail: "",
+			connector: true,
 		}));
 	}
 	return clauseFieldSuggestions({
@@ -154,6 +157,7 @@ function rowsFor(value: string, start: number, end: number): SuggestionRow[] {
 			value: suggestion.column,
 			insertText: suggestion.insertText,
 			detail: typeOf(suggestion.column),
+			connector: false,
 		}));
 }
 
@@ -292,17 +296,17 @@ function onKeydown(event: KeyboardEvent): void {
 		case "Tab": {
 			const row = open.value ? rows.value[activeIndex.value] : undefined;
 			if (row === undefined) return;
-			// Tab completes. Enter belongs to the clause: it runs the filter, so
-			// no suggestion can ever be applied by the keystroke that applies
-			// the fragment, however the list happens to be sitting under it.
 			event.preventDefault();
 			pick(row);
 			return;
 		}
-		case "Enter":
+		case "Enter": {
 			event.preventDefault();
-			emit("submit");
+			const row = open.value ? rows.value[activeIndex.value] : undefined;
+			if (row !== undefined && !row.connector) pick(row);
+			else emit("submit");
 			return;
+		}
 	}
 }
 

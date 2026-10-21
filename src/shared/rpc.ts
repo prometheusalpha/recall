@@ -24,6 +24,8 @@ import type {
 	SqlFileOpResult,
 	SqlFileWriteResult,
 } from "./sqlFile";
+
+import type { FindInFilesRequest, FindInFilesResult } from "./findInFiles";
 /**
  * Requests the renderer sends to the Bun process (executed in Bun).
  * One method per driver operation, mirroring the reference app's Tauri command
@@ -265,6 +267,14 @@ export type BunRequests = {
 			move: boolean;
 		};
 		response: SqlFileOpBatchResult;
+	};
+	/**
+	 * Full-text search of the opened folders through the bundled ripgrep. A
+	 * newer call kills the one still running, which then resolves empty.
+	 */
+	findInFiles: {
+		params: FindInFilesRequest;
+		response: FindInFilesResult;
 	};
 	/**
 	 * Every mnemonic bookmark, ordered by mnemonic. Rows whose file has been
