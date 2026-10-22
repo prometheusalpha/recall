@@ -684,6 +684,22 @@ body.panel-resizing * {
 	color: var(--grid-type-spatial-fg);
 }
 
+/* Row paint sits on the row, not the cells: cells carry no fill of their own,
+   so selection and hover still layer on top. Parity comes from the data index
+   because the virtual scroller recycles row views, which breaks :nth-child. */
+.grid-row[data-odd="true"] {
+	background: var(--grid-row-stripe-bg);
+}
+
+.grid-row[data-current="true"] {
+	background: var(--grid-row-current-bg);
+}
+
+/* The gutter is opaque, so it needs the current-row tint painted on directly. */
+.grid-row[data-current="true"] .grid-cell.grid-row-number:not([data-selected="true"]) {
+	background: var(--grid-row-current-bg);
+}
+
 /* Hover must not repaint a selected cell: both rules carry the same
    specificity, so without the :not() the later one wins and the selection
    disappears the moment the pointer crosses the range. */

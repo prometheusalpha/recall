@@ -95,6 +95,10 @@
 	/* Grid selection: a tinted fill for the range; the active cell is outlined
 	   with --primary so a one-cell selection still shows where the caret is. */
 	--data-grid-cell-selected-bg: rgb(191 219 254);
+	/* Zebra stripe and the active cell's row. The row tint is a step lighter
+	   than the selection so a selected range still stands out inside it. */
+	--grid-row-stripe-bg: color-mix(in srgb, var(--foreground) 3%, transparent);
+	--grid-row-current-bg: rgb(232 241 254);
 	/* Cell text wears its column's data type, so a grid is read by shape before
 	   it is read by value. One hue per semantic bucket; a type that matched no
 	   bucket keeps the inherited foreground. Dark-mode values are the lighter
@@ -172,6 +176,8 @@
 
 	--chrome: rgb(27 27 30);
 	--data-grid-cell-selected-bg: rgb(30 64 96);
+	--grid-row-stripe-bg: color-mix(in srgb, var(--foreground) 4%, transparent);
+	--grid-row-current-bg: rgb(27 41 56);
 	--grid-type-integer-fg: #93c5fd;
 	--grid-type-numeric-fg: #67e8f9;
 	--grid-type-string-fg: #86efac;

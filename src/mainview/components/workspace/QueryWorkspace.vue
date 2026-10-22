@@ -387,9 +387,7 @@ async function countActiveTable(): Promise<void> {
 	const tab = activeTab.value;
 	const id = tabId.value;
 	if (!tab || !id || tab.mode !== "table") return;
-	if (tableCountBusy.value[id] === true || tableRowCount.value[id] !== undefined) {
-		return;
-	}
+	if (tableCountBusy.value[id] === true) return;
 	tableCountBusy.value = { ...tableCountBusy.value, [id]: true };
 	try {
 		// The tab can be restored from disk before its connection exists, so the

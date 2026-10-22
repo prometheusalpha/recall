@@ -665,7 +665,7 @@ const selection = useGridSelection({
  * The sum over the SELECTED RECTANGLE, or `null` when there is no selection —
  * so the statusbar renders nothing at all rather than a misleading `Sum 0`.
  * Any cell that parses to a number counts, whatever its column type; the rest
- * (NULL, JSON, non-numeric text) are SKIPPED and counted. The raw value is read
+ * (NULL, JSON, non-numeric text) are left out. The raw value is read
  * through `cellAt` instead of the formatted text, because separators or a
  * suffix in a display string would make a perfectly good number look
  * non-numeric. The column type only travels along to unwrap `money` text.
@@ -2106,7 +2106,13 @@ function rowKey(_row: unknown, index: number): number {
 				@keydown="onKeydown"
 			>
 					<template #default="{ item, index }">
-						<div class="grid-row flex" role="row" :style="rowStyle">
+						<div
+							class="grid-row flex"
+							role="row"
+							:style="rowStyle"
+							:data-odd="index % 2 === 1"
+							:data-current="selection.focus.value?.row === index"
+						>
 							<Tooltip>
 								<TooltipTrigger as-child>
 									<div
@@ -2218,7 +2224,8 @@ function rowKey(_row: unknown, index: number): number {
 					<!-- A table tab's statement carries a `LIMIT`, so its row count is
 					     a floor, not a total: it reads `loaded/known` and, while more
 					     rows may exist, the `+` on the upper bound runs the one
-					     `COUNT(*)` that turns it into an exact total. That count is
+					     `COUNT(*)` that turns it into an exact total; clicking the total
+					     runs it again. That count is
 					     of the filtered set, not the page, so it stays valid across
 					     paging. A query tab's rows are the whole result, so its
 					     length is already the total. -->
@@ -2227,9 +2234,18 @@ function rowKey(_row: unknown, index: number): number {
 					</span>
 					<span v-else class="flex shrink-0 items-baseline tabular-nums">
 						<span>{{ loadedRows }}/</span>
-						<span v-if="rowCount !== null">{{ rowCount.toLocaleString() }}</span>
+						<span v-if="countBusy" class="text-muted-foreground">…</span>
 						<button
-							v-else-if="mayHaveMoreRows && !countBusy"
+							v-else-if="rowCount !== null"
+							type="button"
+							class="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-foreground"
+							title="Count again"
+							@click="emit('count')"
+						>
+							{{ rowCount.toLocaleString() }}
+						</button>
+						<button
+							v-else-if="mayHaveMoreRows"
 							type="button"
 							class="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-foreground"
 							title="Count every row matching the filter"
@@ -2237,7 +2253,6 @@ function rowKey(_row: unknown, index: number): number {
 						>
 							{{ loadedRows }}+
 						</button>
-						<span v-else-if="countBusy" class="text-muted-foreground">…</span>
 						<span v-else>{{ loadedRows }}</span>
 						<span class="ml-1">rows</span>
 					</span>
@@ -2248,17 +2263,13 @@ function rowKey(_row: unknown, index: number): number {
 					>
 						{{ selection.selectedCellCount.value }} cells selected
 					</span>
-					<!-- The sum is over the SELECTED RECTANGLE only, and
-					     cells that do not parse to a number are skipped — so
-					     the skipped count is stated rather than hidden. -->
+					<!-- The sum is over the SELECTED RECTANGLE only; cells that do
+					     not parse to a number are left out of it. -->
 					<span
 						v-if="selectionSum !== null"
 						class="shrink-0 tabular-nums"
 					>
 						Sum {{ selectionSum.sum.toLocaleString(undefined, { maximumFractionDigits: 6 }) }}
-						<template v-if="selectionSum.skipped > 0">
-							· <span class="text-muted-foreground">{{ selectionSum.skipped }} skipped</span>
-						</template>
 					</span>
 					<span v-if="result.truncated" class="shrink-0 text-warning">
 						truncated
