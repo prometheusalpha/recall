@@ -123,6 +123,9 @@ export async function openConnection(
 
 	const driver = driverFor(cfg.dbType);
 	let db: SQL;
+	// Assigned once the session is registered; `onclose` runs later than that
+	// in every normal case, and the guard below covers the one that is not.
+	let live: LiveConnection | undefined;
 	try {
 		// `onclose` fires when the pooled socket dies under us; the renderer
 		// needs to hear about it even though no RPC call triggered it.
@@ -130,7 +133,12 @@ export async function openConnection(
 		db = new SQL({
 			...options,
 			onclose: (error: Error | null) => {
-				if (connections.get(key) === undefined) return;
+				// Compare identity, not existence: a session replaced after a
+				// failed probe has its socket closed *after* the replacement is
+				// registered, and its callback arriving late must not speak for
+				// the session that now owns the key — doing so drops a healthy
+				// session and raises a "lost" toast the user never earned.
+				if (live === undefined || connections.get(key) !== live) return;
 				connections.delete(key);
 				notifyConnectionLost(
 					cfg.id,
@@ -153,7 +161,7 @@ export async function openConnection(
 		throw normalizeBackendError(error);
 	}
 
-	const live: LiveConnection = {
+	live = {
 		config: cfg,
 		db,
 		connectedAt: Date.now(),
