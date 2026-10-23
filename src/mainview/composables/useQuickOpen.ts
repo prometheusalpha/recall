@@ -18,6 +18,7 @@ import { toast } from "./useToast";
 import { errorMessage } from "../lib/rpc";
 import { matchFuzzy } from "../lib/fuzzy";
 import { useTableCatalog } from "./useTableCatalog";
+import { tableDemotion } from "../lib/tableRank";
 
 export type QuickOpenItem =
 	| {
@@ -298,9 +299,17 @@ export function useQuickOpen(): QuickOpenPalette {
 		return rows;
 	}
 
+	/** Only tables are demoted; files and connections are never noise. */
+	const demotion = (item: QuickOpenItem): number =>
+		item.kind === "table" ? tableDemotion(item) : 0;
+
 	/** Rows of one kind before another, then alphabetically. */
 	const byKindThenLabel = (a: QuickOpenItem, b: QuickOpenItem): number =>
 		KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.label.localeCompare(b.label);
+
+	/** Demoted tables last, then {@link byKindThenLabel}. */
+	const byDemotionThenKind = (a: QuickOpenItem, b: QuickOpenItem): number =>
+		demotion(a) - demotion(b) || byKindThenLabel(a, b);
 
 	/**
 	 * Blank-query ordering: one row of each kind in turn, then the next. The plain
@@ -314,7 +323,7 @@ export function useQuickOpen(): QuickOpenPalette {
 	function interleaveKinds(rows: QuickOpenItem[]): QuickOpenItem[] {
 		const queues: QuickOpenItem[][] = KINDS.map(() => []);
 		for (const row of rows) queues[KIND_ORDER[row.kind]].push(row);
-		for (const queue of queues) queue.sort(byKindThenLabel);
+		for (const queue of queues) queue.sort(byDemotionThenKind);
 		const out: QuickOpenItem[] = [];
 		while (out.length < MAX_RESULTS) {
 			// A blank query opens on "everything", so stop as soon as a full
@@ -341,12 +350,19 @@ export function useQuickOpen(): QuickOpenPalette {
 		const needle = query.value.trim();
 		if (!needle) return interleaveKinds(all);
 
-		const scored: { item: QuickOpenItem; score: number }[] = [];
+		const scored: { item: QuickOpenItem; score: number; demotion: number }[] = [];
 		for (const item of all) {
 			const match = matchFuzzy(needle, item.label);
-			if (match) scored.push({ item, score: match.score });
+			if (match) scored.push({ item, score: match.score, demotion: demotion(item) });
 		}
-		scored.sort((a, b) => a.score - b.score || byKindThenLabel(a.item, b.item));
+		// Demotion outranks the match score: a closer hit in `pg_catalog` or on a
+		// `_`-prefixed table still sits below every ordinary result.
+		scored.sort(
+			(a, b) =>
+				a.demotion - b.demotion ||
+				a.score - b.score ||
+				byKindThenLabel(a.item, b.item),
+		);
 		return scored.slice(0, MAX_RESULTS).map((entry) => entry.item);
 	});
 
