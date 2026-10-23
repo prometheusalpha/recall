@@ -11,10 +11,12 @@
  * a half-typed clause never reaches the server mid-word.
  */
 import { computed, ref, watch } from "vue";
-import { ArrowUpDown, Check, Filter, Minus, TriangleAlert, X } from "lucide-vue-next";
+import { ArrowUpDown, Check, Filter, GripVertical, Minus, TriangleAlert, X } from "lucide-vue-next";
 import type { BackendError, SqlDbType } from "../../../shared/types";
 import { Button } from "../ui/button";
 import ClauseSuggestInput from "./ClauseSuggestInput.vue";
+import { useListReorder } from "../../composables/useListReorder";
+import { moveItem } from "../../lib/columnOrder";
 import {
 	DropdownMenu,
 	DropdownMenuCheckboxItem,
@@ -42,6 +44,11 @@ const props = withDefaults(
 		/** The subset currently rendered; always a subset of `columns`. */
 		visibleColumns?: string[];
 		/**
+		 * `columns` in the grid's display order, hidden ones included. The menu
+		 * lists this so dragging a row and dragging a header move one order.
+		 */
+		orderedColumns?: string[];
+		/**
 		 * The clause failure of the last run, while the rows on screen are the
 		 * ones from before it. The band is where the fix goes, so it stays and
 		 * reports the failure itself instead of the pane going blank.
@@ -56,6 +63,7 @@ const props = withDefaults(
 	{
 		columns: () => [],
 		visibleColumns: () => [],
+		orderedColumns: () => [],
 		columnTypes: () => [],
 		error: null,
 		errorTarget: null,
@@ -68,6 +76,7 @@ const emit = defineEmits<{
 	/** Fired on Enter, or when the clear button is pressed. */
 	apply: [];
 	"update:visibleColumns": [columns: string[]];
+	"update:orderedColumns": [columns: string[]];
 }>();
 
 /** The shape `ClauseSuggestInput` exposes via `defineExpose`. */
@@ -96,6 +105,18 @@ function focusWhere(): boolean {
 }
 
 defineExpose({ focusWhere });
+
+/** Falls back to the statement's order for a parent that does not reorder. */
+const menuColumns = computed(() =>
+	props.orderedColumns.length > 0 ? props.orderedColumns : props.columns,
+);
+
+const columnDrag = useListReorder({
+	rowSelector: "[data-column-row]",
+	listSelector: "[data-column-menu]",
+	onReorder: (from, to) =>
+		emit("update:orderedColumns", moveItem(menuColumns.value, from, to)),
+});
 
 const hiddenCount = computed(
 	() => props.columns.length - props.visibleColumns.length,
@@ -297,6 +318,7 @@ function commit(): void {
 			     at the button's few characters. `w-max` grows to the longest
 			     name, capped by the space the popper reports. -->
 			<DropdownMenuContent
+				data-column-menu
 				align="end"
 				class="max-h-80 w-max min-w-56 max-w-[min(32rem,var(--reka-dropdown-menu-content-available-width))] overflow-y-auto"
 			>
@@ -337,17 +359,38 @@ function commit(): void {
 					<span class="truncate">All columns</span>
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuSeparator />
+				<!-- The drop rule is drawn on the row the drop displaces, on the
+				     edge the dragged row will land against. -->
 				<DropdownMenuCheckboxItem
-					v-for="column in columns"
+					v-for="(column, index) in menuColumns"
 					:key="column"
+					data-column-row
 					:model-value="visibleColumns.includes(column)"
-					class="pr-1.5"
+					class="relative pr-1.5 pl-0.5"
+					:class="[
+						columnDrag.dragging.value === index && 'opacity-50',
+						columnDrag.dropMarker.value?.index === index &&
+							(columnDrag.dropMarker.value.edge === 'top'
+								? 'before:absolute before:inset-x-1 before:top-0 before:h-0.5 before:bg-primary'
+								: 'before:absolute before:inset-x-1 before:bottom-0 before:h-0.5 before:bg-primary'),
+					]"
 					@select.prevent
 					@update:model-value="toggleColumn(column, $event)"
 				>
 					<!-- Empty, not absent: `reka` appends its own tick on the right,
 					     and the tick this row draws on the left is the only one. -->
 					<template #indicator-icon><span /></template>
+					<!-- The handle alone starts a drag, so a click anywhere else on
+					     the row still toggles it. `click.stop` keeps a press that
+					     never became a drag from toggling the row either. -->
+					<span
+						class="-mr-1 flex shrink-0 cursor-grab touch-none items-center text-muted-foreground hover:text-foreground"
+						aria-hidden="true"
+						@pointerdown="columnDrag.start($event, index)"
+						@click.stop.prevent
+					>
+						<GripVertical class="size-3.5" />
+					</span>
 					<span
 						class="flex size-3.5 shrink-0 items-center justify-center rounded-[4px] border"
 						:class="

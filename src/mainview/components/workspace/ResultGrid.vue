@@ -60,6 +60,7 @@ import {
 } from "../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import ResultFilterBar from "./ResultFilterBar.vue";
+import { fullColumnOrder, mergeVisibleOrder, moveItem } from "../../lib/columnOrder";
 
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
@@ -312,21 +313,17 @@ function columnsSignature(names: string[]): string {
  *  the grid was created with — a restored tab arrives already carrying one. */
 let orderedColumns = columnsSignature(props.result.columns);
 
-const columns = computed(() => {
-	const visible = props.result.columns.filter(
-		(name) => !hiddenColumns.value.has(name),
-	);
-	const overlay = columnOrder.value;
-	if (overlay.length === 0) return visible;
-	// A name in the overlay can be hidden or absent from this result, and a
-	// name can be missing from it; both have to be reconciled or the rendered
-	// header and the row cells underneath it would disagree.
-	const live = new Set(visible);
-	const kept = overlay.filter((name) => live.has(name));
-	if (kept.length === 0) return visible;
-	const placed = new Set(kept);
-	return [...kept, ...visible.filter((name) => !placed.has(name))];
-});
+/**
+ * Every result column in display order, hidden ones included. The Columns menu
+ * lists and drags this, so its order and the header's are one order.
+ */
+const allColumnsOrdered = computed(() =>
+	fullColumnOrder(columnOrder.value, props.result.columns),
+);
+
+const columns = computed(() =>
+	allColumnsOrdered.value.filter((name) => !hiddenColumns.value.has(name)),
+);
 
 /** Result index of each rendered column, so selection survives hiding columns. */
 const columnIndexes = computed(() =>
@@ -1049,33 +1046,29 @@ function stopColumnDrag(): void {
 }
 
 /**
- * Where a visible column index ended up after one move. The selection is
- * addressed by visible index, so without this a reorder would silently slide
- * the highlight onto whichever column inherited the index the user had picked.
+ * Applies a new full order. The selection is addressed by visible index, so it
+ * is carried over by column name; otherwise it would slide onto whichever
+ * column inherited the index the user had picked.
  */
-function movedColumnIndex(index: number, from: number, to: number): number {
-	if (index === from) return to;
-	if (from < to && index > from && index <= to) return index - 1;
-	if (from > to && index >= to && index < from) return index + 1;
-	return index;
+function setColumnOrder(next: string[]): void {
+	const before = columns.value;
+	const anchor = selection.anchor.value;
+	const focus = selection.focus.value;
+	columnOrder.value = next;
+	const after = columns.value;
+	const remap = (col: number): number => {
+		const name = before[col];
+		const index = name === undefined ? -1 : after.indexOf(name);
+		return index >= 0 ? index : col;
+	};
+	if (anchor) selection.anchor.value = { row: anchor.row, col: remap(anchor.col) };
+	if (focus) selection.focus.value = { row: focus.row, col: remap(focus.col) };
 }
 
 function reorderColumn(from: number, to: number): void {
 	const current = columns.value;
 	if (from < 0 || to < 0 || to >= current.length || from === to) return;
-	const next = [...current];
-	const [moved] = next.splice(from, 1);
-	if (moved === undefined) return;
-	next.splice(to, 0, moved);
-	columnOrder.value = next;
-	const anchor = selection.anchor.value;
-	const focus = selection.focus.value;
-	if (anchor) {
-		selection.anchor.value = { row: anchor.row, col: movedColumnIndex(anchor.col, from, to) };
-	}
-	if (focus) {
-		selection.focus.value = { row: focus.row, col: movedColumnIndex(focus.col, from, to) };
-	}
+	setColumnOrder(mergeVisibleOrder(allColumnsOrdered.value, moveItem(current, from, to)));
 }
 
 /**
@@ -1902,11 +1895,13 @@ function rowKey(_row: unknown, index: number): number {
 			:column-types="result.columnTypes"
 			:db-type="dbType"
 			:visible-columns="columns"
+			:ordered-columns="allColumnsOrdered"
 			:error="bandError"
 			:error-target="clauseError?.target ?? null"
 			@update:where="(value) => emit('update:where', value)"
 			@update:order-by="(value) => emit('update:orderBy', value)"
 			@update:visible-columns="(next) => emit('update:visibleColumns', next)"
+			@update:ordered-columns="setColumnOrder"
 			@apply="emit('applyFilter')"
 		/>
 
