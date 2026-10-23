@@ -459,6 +459,13 @@ body.panel-resizing * {
 	background-color: var(--data-grid-cell-selected-bg);
 }
 
+/* A staged edit not yet committed. Declared after the selection fill so a
+   selected pending cell still reads as pending. */
+.grid-cell[data-pending="true"] {
+	background-color: var(--warning-bg);
+	box-shadow: inset 2px 0 0 var(--warning);
+}
+
 .grid-cell[data-active="true"],
 .grid-cell[data-selected="true"][data-active="true"] {
 	box-shadow: inset 0 0 0 1.5px var(--primary);

@@ -160,23 +160,24 @@ type CoreRequests = {
 		response: number;
 	};
 	/**
-	 * Rewrite one cell of a table row, addressed by its primary key. The caller
-	 * sends the key columns it already rendered, so the backend never has to
-	 * re-discover the table's keys.
+	 * Rewrite the edited cells of several table rows in one transaction, each row
+	 * addressed by its primary key. The caller sends the key columns it already
+	 * rendered, so the backend never has to re-discover the table's keys.
 	 */
-	updateCell: {
+	updateCells: {
 		params: {
 			connectionId: string;
 			database: string;
 			schema: string;
 			table: string;
-			/** Primary key columns, in the order their values are supplied. */
+			/** Primary key columns, in the order each row's `keyValues` are supplied. */
 			keyColumns: string[];
-			keyValues: unknown[];
-			column: string;
-			value: unknown;
+			rows: {
+				keyValues: unknown[];
+				changes: { column: string; value: unknown }[];
+			}[];
 		};
-		response: { sql: string };
+		response: { statements: number };
 	};
 	/** Write a serialised result set to a file the user picked a folder for. */
 	exportResult: {

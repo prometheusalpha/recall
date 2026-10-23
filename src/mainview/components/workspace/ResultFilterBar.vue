@@ -298,6 +298,9 @@ function commit(): void {
 			</div>
 		</template>
 
+		<!-- Grid-owned actions next to Columns, e.g. committing staged edits. -->
+		<slot name="actions" />
+
 		<!-- Column visibility lives with the other actions rather than in its own
 		     row: it is per-result state, and a second band above the grid is
 		     height the data does not get back. -->

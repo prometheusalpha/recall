@@ -48,6 +48,7 @@ import {
 	writeSqlFile,
 } from "./sqlFiles";
 import { findInFiles } from "./findInFiles";
+import { applyRowUpdates } from "./rowUpdate";
 import {
 	listConnections as listStoredConnections,
 	saveConnections as saveStoredConnections,
@@ -505,52 +506,27 @@ export const handlers = {
 		return countTableRows(db, driverFor(config.dbType), database, schema, table, where);
 	},
 
-	async updateCell({
+	async updateCells({
 		connectionId,
 		database,
 		schema,
 		table,
 		keyColumns,
-		keyValues,
-		column,
-		value,
-	}: Params<"updateCell">) {
+		rows,
+	}: Params<"updateCells">) {
 		const { db, config } = await getConnection(connectionId, database);
-		const isMysql = config.dbType === "mysql";
-		const quote = isMysql ? "`" : '"';
-
-		/**
-		 * Identifiers cannot be bound as values, so they are quoted instead. The
-		 * doubling of the quote character is what keeps a table literally named
-		 * `a"b` from breaking out of the identifier.
-		 */
-		const identifier = (name: string) =>
-			quote + name.split(quote).join(quote + quote) + quote;
-
-		// Every primary key column is bound by value, in the order the caller
-		// supplied, so a composite key narrows the row the same way the grid shows it.
-		const placeholders = keyColumns.map((_, index) =>
-			isMysql ? "?" : `$${index + 1}`,
+		const statements = await applyRowUpdates(
+			db,
+			config.dbType,
+			schema,
+			table,
+			keyColumns,
+			rows,
 		);
-		const valuesStartAt = keyColumns.length;
-		const assignmentValue = isMysql ? "?" : `$${valuesStartAt + 1}`;
-
-		const target = isMysql || !schema
-			? identifier(table)
-			: `${identifier(schema)}.${identifier(table)}`;
-		const where = keyColumns
-			.map((name, index) => `${identifier(name)} = ${placeholders[index]}`)
-			.join(" AND ");
-
-		const sql =
-			`UPDATE ${target} SET ${identifier(column)} = ${assignmentValue}` +
-			` WHERE ${where}`;
-
-		await db.unsafe(sql, [...keyValues, value]);
-		// The grid redraws this row from the re-run SELECT rather than trusting a
-		// local guess: a trigger, a generated column or a rejected constraint can
-		// all make the stored value differ from what was written.
-		return { sql };
+		// The grid redraws from the re-run SELECT rather than trusting a local
+		// guess: a trigger or a generated column can store something other than
+		// what was written.
+		return { statements };
 	},
 
 	async exportResult({ folder, fileName, contents }: Params<"exportResult">) {

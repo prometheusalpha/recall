@@ -46,8 +46,10 @@ import {
 	type GridNavigationDirection,
 } from "../../composables/useGridSelection";
 import { useColumnWindow } from "../../composables/useColumnWindow";
+import { usePendingEdits } from "../../composables/usePendingEdits";
 import { useGridFont } from "../../composables/useGridFont";
 import { useShortcuts } from "../../composables/useShortcuts";
+import { isMacShortcutPlatform } from "../../lib/shortcutDisplay";
 import { registerResultFilterFocus } from "../../composables/useResultFilterFocus";
 import { Button } from "../ui/button";
 import CustomContextMenu from "../ui/CustomContextMenu.vue";
@@ -679,7 +681,7 @@ const selectionSum = computed<ReturnType<typeof sumCells> | null>(() => {
 			const resultCol = columnIndexes.value[col];
 			if (resultCol === undefined) continue;
 			cells.push({
-				value: cellAt(rows.value[row], resultCol),
+				value: shownAt(row, resultCol),
 				columnType: props.result.columnTypes[resultCol],
 			});
 		}
@@ -1146,7 +1148,7 @@ function updateColumnWindow(): void {
 function cellText(row: number, col: number): string {
 	const resultCol = columnIndexes.value[col];
 	if (resultCol === undefined) return "";
-	return formatValue(cellAt(rows.value[row], resultCol), resultCol);
+	return formatValue(shownAt(row, resultCol), resultCol);
 }
 
 function startEdit(row: number, col: number): void {
@@ -1176,57 +1178,106 @@ function parseDraft(draft: string): unknown {
 	return draft;
 }
 
-async function commitEdit(move?: { row: number; col: number }): Promise<void> {
-	const pending = editing.value;
-	if (!pending) return;
-	const target = editable.value;
-	if (!target) {
-		editing.value = null;
-		return;
-	}
-	// `pending.col` indexes the columns the grid is *showing*. Once a column has
+/**
+ * Cell edits wait here until the user commits them, so a slip of the keyboard
+ * never reaches the table. The result watcher drops them: a rerun, a page or a
+ * filter change means the row indexes they point at are gone.
+ */
+const pendingEdits = usePendingEdits();
+const committingEdits = ref(false);
+const pendingEditCount = pendingEdits.count;
+const commitShortcutLabel = isMacShortcutPlatform() ? "⌘S" : "Ctrl+S";
+
+/** A cell's value as the grid shows it: the staged edit, else what the result holds. */
+function shownAt(row: number, resultCol: number): unknown {
+	const edit = pendingEdits.get(row, resultCol);
+	return edit ? edit.value : cellAt(rows.value[row], resultCol);
+}
+
+function commitEdit(move?: { row: number; col: number }): void {
+	const open = editing.value;
+	if (!open) return;
+	editing.value = null;
+	// `open.col` indexes the columns the grid is *showing*. Once a column has
 	// been hidden that no longer lines up with the result, so the visible index
 	// is translated before it is used to name the column to write.
-	const resultCol = columnIndexes.value[pending.col];
-	const column =
-		resultCol === undefined ? undefined : props.result.columns[resultCol];
-	if (column === undefined) {
-		editing.value = null;
+	const resultCol = columnIndexes.value[open.col];
+	if (resultCol === undefined || props.result.columns[resultCol] === undefined) {
 		return;
 	}
-	const keyValues = target.keyColumns.map((name) => {
-		const keyIndex = props.result.columns.indexOf(name);
-		return keyIndex === -1 ? null : cellAt(rows.value[pending.row], keyIndex);
-	});
+	// Typing the original text back is undoing the edit, not making one.
+	const original = formatValue(cellAt(rows.value[open.row], resultCol), resultCol);
+	if (open.draft === original) pendingEdits.remove(open.row, resultCol);
+	else pendingEdits.set(open.row, resultCol, parseDraft(open.draft));
+	if (move) startEdit(move.row, move.col);
+}
 
-	editing.value = null;
+async function commitPendingEdits(): Promise<void> {
+	const target = editable.value;
+	if (!target || pendingEdits.count.value === 0 || committingEdits.value) return;
+	// Keys come from the result, never the overlay: editing a key column must
+	// still address the row by the key it had when it was read.
+	const keyIndexes = target.keyColumns.map((name) =>
+		props.result.columns.indexOf(name),
+	);
+	const changedRows = pendingEdits.grouped().map(({ row, edits }) => ({
+		keyValues: keyIndexes.map((index) =>
+			index === -1 ? null : cellAt(rows.value[row], index),
+		),
+		changes: edits.map((edit) => ({
+			column: props.result.columns[edit.resultCol] ?? "",
+			value: edit.value,
+		})),
+	}));
+	committingEdits.value = true;
 	try {
-		await rpc.request.updateCell(
+		await rpc.request.updateCells(
 			{
 				connectionId: target.connectionId,
 				database: target.database,
 				schema: target.schema,
 				table: target.table,
 				keyColumns: target.keyColumns,
-				keyValues,
-				column,
-				value: parseDraft(pending.draft),
+				rows: changedRows,
 			},
 			{ maxRequestTime: 30_000 },
 		);
-		toast(`Updated ${target.table}.${column}`);
-		// Re-read the row rather than trusting the value we sent: a trigger or
+		pendingEdits.clear();
+		toast(
+			`Updated ${changedRows.length} row${changedRows.length === 1 ? "" : "s"} in ${target.table}`,
+		);
+		// Re-read the rows rather than trusting the values we sent: a trigger or
 		// a generated column can store something other than what was written.
 		emit("rerun");
 	} catch (err) {
+		// The transaction rolled back, so the edits stay staged for another try.
 		toast(errorMessage(err));
+	} finally {
+		committingEdits.value = false;
 	}
-	if (move) startEdit(move.row, move.col);
+}
+
+function discardPendingEdits(): void {
+	pendingEdits.clear();
+}
+
+/** Mod-S commits from the grid; the window save handler skips table tabs. */
+function commitFromShortcut(event: KeyboardEvent): boolean {
+	if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
+		return false;
+	}
+	if (event.key.toLowerCase() !== "s") return false;
+	if (!canEdit.value) return false;
+	event.preventDefault();
+	if (event.repeat) return true;
+	commitEdit();
+	void commitPendingEdits();
+	return true;
 }
 
 /** True when the cell at a rendered column currently shows NULL. */
 function isNullAt(row: number, col: number): boolean {
-	return isNullValue(cellAt(rows.value[row], col));
+	return isNullValue(shownAt(row, col));
 }
 
 /**
@@ -1518,6 +1569,9 @@ function selectionToTsv(): string {
 }
 
 function onKeydown(event: KeyboardEvent): void {
+	// Ahead of the editing guard so Mod-S from an open editor stages its draft
+	// and commits it with the rest.
+	if (commitFromShortcut(event)) return;
 	if (editing.value) return;
 
 	// Ahead of the accel branches and the `NAVIGATION_KEYS` fallback: a rebound
@@ -1614,6 +1668,7 @@ watch(
 	() => props.result,
 	(result) => {
 		editing.value = null;
+		pendingEdits.clear();
 		// Same columns, new rows: the drag still describes what is on screen, so a
 		// reload (or a sort, or a new filter) keeps the order the user put the
 		// columns in. A changed column set drops the overlay — carrying it over
@@ -1747,7 +1802,7 @@ const peekCell = computed<{
 	if (!focus) return null;
 	const resultColumn = columnIndexes.value[focus.col];
 	if (resultColumn === undefined) return null;
-	const value = cellAt(rows.value[focus.row], resultColumn);
+	const value = shownAt(focus.row, resultColumn);
 	return {
 		row: focus.row,
 		col: focus.col,
@@ -1903,7 +1958,30 @@ function rowKey(_row: unknown, index: number): number {
 			@update:visible-columns="(next) => emit('update:visibleColumns', next)"
 			@update:ordered-columns="setColumnOrder"
 			@apply="emit('applyFilter')"
-		/>
+		>
+			<template v-if="pendingEditCount > 0" #actions>
+				<Button
+					size="micro"
+					variant="ghost"
+					class="text-warning"
+					:disabled="committingEdits"
+					:title="`Commit ${pendingEditCount} edited cell${pendingEditCount === 1 ? '' : 's'} (${commitShortcutLabel})`"
+					@click="commitPendingEdits"
+				>
+					Commit
+					<span class="tabular-nums">{{ pendingEditCount }}</span>
+				</Button>
+				<Button
+					size="micro"
+					variant="ghost"
+					:disabled="committingEdits"
+					title="Discard edited cells"
+					@click="discardPendingEdits"
+				>
+					Discard
+				</Button>
+			</template>
+		</ResultFilterBar>
 
 		<!-- Failure: the message, its code and where the server said it is. -->
 		<div
@@ -2100,7 +2178,7 @@ function rowKey(_row: unknown, index: number): number {
 				@scroll="onBodyScroll"
 				@keydown="onKeydown"
 			>
-					<template #default="{ item, index }">
+					<template #default="{ index }">
 						<div
 							class="grid-row flex"
 							role="row"
@@ -2154,6 +2232,7 @@ function rowKey(_row: unknown, index: number): number {
 								:data-null="isNullAt(index, columnIndexes[columnIndex] ?? 0)"
 								:data-selected="selection.isSelected(index, columnIndex)"
 								:data-active="selection.isActive(index, columnIndex)"
+								:data-pending="pendingEdits.has(index, columnIndexes[columnIndex] ?? -1)"
 								@click="onCellClick(index, columnIndex, $event)"
 								@pointerdown="onCellPointerDown(index, columnIndex, $event)"
 								@dblclick="startEdit(index, columnIndex)"
@@ -2176,7 +2255,7 @@ function rowKey(_row: unknown, index: number): number {
 									:class="cellTypeClass(index, columnIndex)"
 								>{{
 									cellDisplayValue(
-										cellAt(item, columnIndexes[columnIndex] ?? 0),
+										shownAt(index, columnIndexes[columnIndex] ?? 0),
 										columnIndexes[columnIndex] ?? 0,
 									)
 								}}</span>
