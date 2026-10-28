@@ -338,9 +338,37 @@ export async function getConnection(
 ): Promise<LiveConnection> {
 	const primary = await handOut(await openPrimary(connectionId));
 	if (!driverFor(primary.config.dbType).databaseScoped) return primary;
+	return sessionIn(primary, database);
+}
+
+/**
+ * The session for running the user's own SQL against `database`.
+ *
+ * Unqualified names in an editor resolve against the session's current
+ * database, so even MySQL needs a session opened *in* the tab's database. A
+ * `USE` on the shared handle would not do: Bun pools several sockets behind it
+ * and the next statement can land on one that never saw the `USE`.
+ */
+export async function getQueryConnection(
+	connectionId: string,
+	database: string,
+): Promise<LiveConnection> {
+	const primary = await handOut(await openPrimary(connectionId));
+	// A MySQL tab with no database picked runs where the profile's default
+	// puts it, as it always has.
+	if (database === "" && !driverFor(primary.config.dbType).databaseScoped) {
+		return primary;
+	}
+	return sessionIn(primary, database);
+}
+
+async function sessionIn(
+	primary: LiveConnection,
+	database: string,
+): Promise<LiveConnection> {
 	if (primary.config.database === database) return primary;
 
-	const key = poolKey(connectionId, database);
+	const key = poolKey(primary.connectionId, database);
 	const existing = connections.get(key);
 	if (existing) return handOut(existing);
 	const pending = opening.get(key);

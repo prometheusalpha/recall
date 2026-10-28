@@ -26,6 +26,7 @@ import {
 	closeConnection,
 	forgetCredential as forgetStoredCredential,
 	getConnection,
+	getQueryConnection,
 	getServerConnection,
 	loadCredential,
 	onConnectionLost,
@@ -556,7 +557,7 @@ export const handlers = {
 		executionId,
 		maxRows,
 	}: Params<"execute">) {
-		const { db, config } = await getConnection(connectionId, database);
+		const { db, config } = await getQueryConnection(connectionId, database);
 		const statements = splitStatements(sql, config.dbType);
 		const startedAt = performance.now();
 		const results: StatementResult[] = [];
@@ -613,7 +614,7 @@ export const handlers = {
 	},
 
 	async explain({ connectionId, database, sql }: Params<"explain">) {
-		const { db, config } = await getConnection(connectionId, database);
+		const { db, config } = await getQueryConnection(connectionId, database);
 		try {
 			return {
 				plan: await driverFor(config.dbType).explain(db, sql),

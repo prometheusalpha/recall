@@ -67,9 +67,20 @@ export const mysqlDriver: Driver = {
 		const database = cfg.database.trim();
 		if (database) options.database = database;
 
+		// MySQL 8 defaults accounts to caching_sha2_password, which without TLS
+		// needs the server's RSA key. Bun 1.3 fetched it on its own; 1.4 refuses
+		// with ERR_MYSQL_PUBLIC_KEY_RETRIEVAL_NOT_ALLOWED, so profiles that work
+		// today would break on the next runtime. `allowPublicKeyRetrieval=false`
+		// in URL params opts out for a server whose key path is not trusted.
+		options.allowPublicKeyRetrieval = true;
+
 		for (const [key, value] of parseUrlParams(cfg.urlParams)) {
 			const tlsOption = MYSQL_TLS_PARAMS[key];
-			if (tlsOption !== undefined) {
+			if (key === "allowPublicKeyRetrieval") {
+				options.allowPublicKeyRetrieval = MYSQL_TLS_TRUE.includes(
+					value.trim().toLowerCase(),
+				);
+			} else if (tlsOption !== undefined) {
 				options[tlsOption] = parseTlsFlag(value);
 			} else if (!MYSQL_IGNORED_PARAMS[key]) {
 				appendUrlParam(options, key, value);
