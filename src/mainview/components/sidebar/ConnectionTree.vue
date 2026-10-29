@@ -872,14 +872,17 @@ function dropConnectionLists(connectionId: string): void {
 		(node): node is Extract<TreeNode, { kind: "connection" }> =>
 			node.kind === "connection" && node.id === connectionId,
 	);
-	if (!connection) return;
+	if (connection) dropSubtreeLists(connection);
+}
 
+/** Drops the cached lists of `root` and everything under it; see above. */
+function dropSubtreeLists(root: TreeNode): void {
 	const stale: string[] = [];
 	const walk = (node: TreeNode): void => {
 		stale.push(node.key);
 		for (const child of childrenOf(node) ?? []) walk(child);
 	};
-	walk(connection);
+	walk(root);
 
 	for (const key of stale) {
 		children.value.delete(key);
@@ -945,6 +948,34 @@ async function reloadOpenContainers(superseded: () => boolean): Promise<void> {
 				if (superseded()) return;
 			}
 		}
+	}
+}
+
+/**
+ * Re-reads one database or schema after a change made outside the app, e.g. a
+ * table created from another client. The row is opened too, since reloading a
+ * collapsed row would show nothing for it.
+ */
+async function reloadContainer(
+	node: Extract<TreeNode, { kind: "database" | "schema" }>,
+): Promise<void> {
+	dropSubtreeLists(node);
+	setExpanded(node.key, true);
+	const superseded = claimCrawl();
+	const reload = async (target: TreeNode): Promise<void> => {
+		await loadChildren(target, superseded);
+		for (const child of childrenOf(target) ?? []) {
+			if (superseded()) return;
+			// Tables cost no request to rebuild, but left unloaded an open one
+			// would render expanded with nothing under it.
+			if (child.kind !== "schema" && child.kind !== "table") continue;
+			if (isExpanded(child)) await reload(child);
+		}
+	};
+	try {
+		await reload(node);
+	} catch (err) {
+		toast(errorMessage(err));
 	}
 }
 
@@ -1159,10 +1190,12 @@ function rowBinding(
 		// connection node, so a lookup on any other kind is guarded above.
 		connectedTitle:
 			node.kind === "connection" ? connections.status[node.id] : undefined,
-		// Connections, tables, columns and indexes own actions of their own, so
+		// Connections, databases, schemas, tables, columns and indexes own actions, so
 		// they answer a right-click; every other row keeps the browser's menu.
 		contextable:
 			node.kind === "connection" ||
+			node.kind === "database" ||
+			node.kind === "schema" ||
 			node.kind === "table" ||
 			(node.kind === "leaf" && node.ddl !== undefined),
 		// A membership test, so paying for it once per rendered row is cheap;
@@ -1192,6 +1225,14 @@ function onRowContextMenu(
 		// The just-built array rides the open call as an override: the prop
 		// update and the open land in the same event turn, so reading
 		// `menuItems` back after the flush would race the state just set.
+		openMenu(event, menuItems.value);
+		return;
+	}
+	if (node.kind === "database" || node.kind === "schema") {
+		menuConnectionId.value = "";
+		menuItems.value = [
+			{ label: "Reload", icon: RefreshCw, action: () => void reloadContainer(node) },
+		];
 		openMenu(event, menuItems.value);
 		return;
 	}
