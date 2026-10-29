@@ -151,4 +151,39 @@ describe.skipIf(target === null)("connection pool replacement", () => {
 		},
 		30_000,
 	);
+
+	// Opening a table asks for rows and key columns at once. The second request
+	// arrives while the first one's probe is still waiting on the dead socket.
+	test(
+		"a request arriving during a probe is not handed the dead session",
+		async () => {
+			const proxy = await startProxy(
+				Number(target?.port || 5432),
+				target?.hostname || "127.0.0.1",
+			);
+			proxies.push(proxy);
+			const cfg = config(proxy.port);
+			try {
+				const live = await openConnection(cfg, true);
+				await live.db.unsafe("select 1");
+				await Bun.sleep(5_100);
+				proxy.blackholeAll();
+
+				const run = async (): Promise<unknown> => {
+					const session = await getConnection(cfg.id, cfg.database);
+					return session.db.unsafe("select 1 as ok");
+				};
+				const results = await Promise.allSettled([run(), run()]);
+				const failures = results.flatMap((result) =>
+					result.status === "rejected"
+						? [String((result.reason as { code?: string })?.code ?? result.reason)]
+						: [],
+				);
+				expect(failures).toEqual([]);
+			} finally {
+				await closeConnection(cfg.id);
+			}
+		},
+		30_000,
+	);
 });

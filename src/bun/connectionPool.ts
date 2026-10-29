@@ -20,6 +20,12 @@ export interface LiveConnection {
 const connections = new Map<string, LiveConnection>();
 /** Opens in flight, so two requests for one database share a single session. */
 const opening = new Map<string, Promise<LiveConnection>>();
+/**
+ * Probes in flight, keyed by the session being probed. The probe's own ping
+ * counts as in flight, so without this a request arriving mid-probe reads the
+ * session as busy and is handed the socket the probe is about to condemn.
+ */
+const probing = new Map<LiveConnection, Promise<LiveConnection>>();
 
 /**
  * Profile configs, kept past the sessions they opened.
@@ -244,14 +250,24 @@ async function probeAlive(live: LiveConnection): Promise<boolean> {
  * like a timeout on a session that is simply working.
  */
 async function handOut(live: LiveConnection): Promise<LiveConnection> {
+	const pending = probing.get(live);
+	if (pending) return pending;
 	if (live.inFlight > 0 || Date.now() - live.idleSince < IDLE_PROBE_AFTER_MS) {
 		return live;
 	}
-	if (await probeAlive(live)) {
-		live.idleSince = Date.now();
-		return live;
-	}
+	const check = (async () => {
+		if (await probeAlive(live)) {
+			live.idleSince = Date.now();
+			return live;
+		}
+		return replace(live);
+	})().finally(() => probing.delete(live));
+	probing.set(live, check);
+	return check;
+}
 
+/** Swap a session that failed its probe for a fresh one from its config. */
+async function replace(live: LiveConnection): Promise<LiveConnection> {
 	const key = poolKey(live.connectionId, live.config.database);
 	const pending = opening.get(key);
 	if (pending) return pending;
